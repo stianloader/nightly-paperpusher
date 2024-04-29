@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.stianloader</groupId>
     <artifactId>nightly-paperpusher</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <name>Nightly Paperpusher</name>
     <description>Maven repository uploading interface</description>
     <inceptionYear>2023</inceptionYear>
@@ -39,7 +39,7 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
-            <version>2.0.12</version>
+            <version>2.0.13</version>
             <scope>compile</scope>
         </dependency>
         <!-- https://mvnrepository.com/artifact/io.javalin/javalin -->
@@ -74,7 +74,7 @@
         <dependency>
             <groupId>org.stianloader</groupId>
             <artifactId>picoresolve</artifactId>
-            <version>1.0.0-a20240424</version>
+            <version>1.0.0-a20240429.1</version>
             <scope>compile</scope>
         </dependency>
     </dependencies>
@@ -126,6 +126,8 @@
                         <configuration>
                             <fallback>false</fallback>
                             <buildArgs>
+                                <buildArg>-march=x86-64-v4</buildArg>
+                                <buildArg>-R:MaxHeapSize=64M</buildArg>
                             </buildArgs>
                             <agent>
                                 <enabled>true</enabled>

@@ -17,7 +17,6 @@ import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -37,6 +36,7 @@ import org.stianloader.picoresolve.GAV;
 import org.stianloader.picoresolve.MavenResolver;
 import org.stianloader.picoresolve.repo.MavenLocalRepositoryNegotiator;
 import org.stianloader.picoresolve.version.MavenVersion;
+import org.stianloader.picoresolve.version.VersionRange;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.xml.sax.SAXException;
@@ -120,41 +120,54 @@ public class JavadocUnpackContext {
             ctx.status(HttpStatus.BAD_REQUEST);
             return;
         }
-        Path filePath = this.srcPath.resolve(group.replace('.', '/')).resolve(artifact).resolve(version).resolve(artifact + '-' + version + "-javadoc.jar");
-        try {
-            if (!filePath.toRealPath().startsWith(this.srcPath.toRealPath())) {
-                LoggerFactory.getLogger(JavadocUnpackContext.class).warn("Potential path traversal attempt from {} (UA {}); Query path: {}; Resolved to: {}", ctx.ip(), ctx.userAgent(), ctx.path(), filePath.toRealPath());
-                ctx.result("HTTP error code 500: Path traversal detected. This incident will be reported.");
-                ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
-                return;
-            }
-        } catch (IOException e) {
-            ctx.result("HTTP error code 404: File not found. There is no javadoc artifact adressable under the provided GAV.");
-            ctx.status(HttpStatus.NOT_FOUND);
-            return;
-        }
-        if (!Files.exists(filePath)) {
-            ctx.result("HTTP error code 404: File not found. There is no javadoc artifact adressable under the provided GAV.");
-            ctx.status(HttpStatus.NOT_FOUND);
-            return;
+
+        class HandledException extends RuntimeException {
+            private static final long serialVersionUID = 1L;
         }
 
-        JarCacheRecord cRecord;
-        try {
-            cRecord = this.lookupCacheRecord(new GAV(group, artifact, MavenVersion.parse(version)), filePath);
-        } catch (InterruptedException e) {
-            LoggerFactory.getLogger(JavadocUnpackContext.class).error("Cache lookup interrupted", e);
-            ctx.result("HTTP error code 508 (loop detected); The process was interrupted. Please try again another time. If the issue does not clear itself, contact the responsible system administrator.");
-            ctx.status(HttpStatus.LOOP_DETECTED);
-            return;
-        } catch (IOException e) {
-            LoggerFactory.getLogger(JavadocUnpackContext.class).error("I/O exception raised during cache lookup", e);
-            ctx.result("HTTP error code 500 (internal server error); An I/O error occured while processing your request. Please try again another time. If the issue does not clear itself, contact the responsible system administrator.");
-            ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
-            return;
-        }
-
-        this.sendEntry(cRecord, internalPath, ctx);
+        MavenResolver resolver = new MavenResolver(new MavenLocalRepositoryNegotiator(this.srcPath).setWriteCacheMetadata(false));
+        resolver.download(group, artifact, VersionRange.parse(version), "javadoc", "jar", Executors.newVirtualThreadPerTaskExecutor())
+            .orTimeout(100L, TimeUnit.MILLISECONDS)
+            .thenApply((entry) -> {
+                Path filePath = entry.getValue().getValue();
+                try {
+                    if (!filePath.toRealPath().startsWith(this.srcPath.toRealPath())) {
+                        LoggerFactory.getLogger(JavadocUnpackContext.class).warn("Potential path traversal attempt from {} (UA {}); Query path: {}; Resolved to: {}", ctx.ip(), ctx.userAgent(), ctx.path(), filePath.toRealPath());
+                        ctx.result("HTTP error code 500: Path traversal detected. This incident will be reported.");
+                        ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+                        throw new HandledException();
+                    }
+                    return this.lookupCacheRecord(entry.getKey(), filePath);
+                } catch (InterruptedException e) {
+                    LoggerFactory.getLogger(getClass()).warn("Error occured while handling request", e);
+                    ctx.result("HTTP error code 508 (loop detected); The process was interrupted. Please try again another time. If the issue does not clear itself, contact the responsible system administrator.");
+                    ctx.status(HttpStatus.LOOP_DETECTED);
+                    throw new HandledException();
+                } catch (IOException e) {
+                    LoggerFactory.getLogger(getClass()).warn("Error occured while handling request", e);
+                    ctx.result("HTTP error code 500 (internal server error); An I/O error occured while processing your request. Please try again another time. If the issue does not clear itself, contact the responsible system administrator.");
+                    ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+                    throw new HandledException();
+                }
+            }).thenAccept((cRecord) -> {
+                this.sendEntry(cRecord, internalPath, ctx);
+            }).exceptionally((ex) -> {
+                if (ex instanceof HandledException) {
+                    return null;
+                } else if (ex.getMessage().equals("java.lang.IllegalStateException: No recommended version is defined in version range and no release version matches the constraints of the version range.")) {
+                    // This isn't all too great of an error management, but does reduce the logspam quite a bit in the worst cases.
+                    ctx.result("HTTP error code 404 (not found). The request version range does not match any version known to the resolver, leaving us unable to process your request.");
+                    ctx.status(HttpStatus.NOT_FOUND);
+                    return null;
+                } else {
+                    LoggerFactory.getLogger(getClass()).warn("Error occured while handling request", ex);
+                    // The issue with logging is that we may not know if the stacktrace is safe to expose to the public.
+                    // Hence, we don't do it and just dump it down the logs.
+                    ctx.result("HTTP error code 500: internal server error; Consult the logs for further information. Does the specified artifact exist? Ensure that the specified version exists and has a javadoc jar attached. If the error persist, contact the responsible system administrator.\nHint when using version ranges: version 1.0 is newer than version 1.0-alpha");
+                    ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+                    return null;
+                }
+            });
     }
 
     private void sendEntry(@NotNull JarCacheRecord cache, @NotNull String entryPath, @NotNull Context outputContext) {
