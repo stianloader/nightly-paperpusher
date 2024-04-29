@@ -1,0 +1,1 @@
+v${project.version}, compiled ${maven.build.timestamp}
