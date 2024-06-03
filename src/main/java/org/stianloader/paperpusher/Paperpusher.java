@@ -86,6 +86,8 @@ public class Paperpusher {
         mvnConfig.put("prefix", "/maven/");
         mvnConfig.put("signCmd", "");
         mvnConfig.put("outputPath", "www/");
+        mvnConfig.put("repositoryId", "paperpusher_repo");
+        mvnConfig.put("maintainMavenIndex", true);
         JSONObject jdConfig = new JSONObject();
         jdConfig.put("prefix", "/javadocs/");
         jdConfig.put("inputPath", "www/");
@@ -121,7 +123,9 @@ public class Paperpusher {
                 String prefix = maven.getString("prefix");
                 String outPath = maven.getString("outputPath");
                 String signCmd = maven.getString("signCmd");
-                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix);
+                String repoId = maven.getString("repositoryId");
+                boolean maintainMavenIndex = maven.optBoolean("maintainMavenIndex", true);
+                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix, repoId, maintainMavenIndex);
             }
 //            JSONObject wiki = obj.optJSONObject("wiki");
 //            MavenConfiguration wikiCfg;

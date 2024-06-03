@@ -11,12 +11,16 @@ public class XMLUtil {
     public static Optional<String> getValue(Element parent, String key) {
         Iterator<Element> it = new ChildElementIterable.NodeListElementIterator(parent.getElementsByTagName(key));
 
-        if (!it.hasNext()) {
-            return Optional.empty();
+        while (it.hasNext()) {
+            Element e = it.next();
+            // Yes, getElementsByTagName is recursive
+            if (e.getParentNode() != parent) {
+                continue;
+            }
+            return Optional.of(e.getTextContent());
         }
 
-        Element e = it.next();
-        return Optional.of(e.getTextContent());
+        return Optional.empty();
     }
 
     public static boolean updateValue(Element parent, String key, String value) {
@@ -38,11 +42,15 @@ public class XMLUtil {
     public static Optional<Element> getElement(Element parent, String key) {
         Iterator<@NotNull Element> it = new ChildElementIterable.NodeListElementIterator(parent.getElementsByTagName(key));
 
-        if (!it.hasNext()) {
-            return Optional.empty();
+        while (it.hasNext()) {
+            Element e = it.next();
+            // Yes, getElementsByTagName is recursive
+            if (e.getParentNode() != parent) {
+                continue;
+            }
+            return Optional.of(e);
         }
 
-        Element e = it.next();
-        return Optional.of(e);
+        return Optional.empty();
     }
 }

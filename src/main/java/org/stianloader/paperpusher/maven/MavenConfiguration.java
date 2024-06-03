@@ -1,20 +1,55 @@
 package org.stianloader.paperpusher.maven;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Iterator;
+import java.util.Map;
 
+import org.apache.maven.index.reader.IndexWriter;
+import org.apache.maven.index.reader.resource.PathWritableResourceHandler;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
 
-public record MavenConfiguration(String signCmd, Path mavenOutputPath, String mavenBindPrefix) {
+public record MavenConfiguration(String signCmd, Path mavenOutputPath, String mavenBindPrefix, String repositoryId, boolean maintainMavenIndex) {
 
     public static final Logger LOGGER = LoggerFactory.getLogger(MavenConfiguration.class);
 
+    private void ensureMavenIndexInitialized(@NotNull MavenPublishContext ctx) {
+        Path mavenIndexDir = this.mavenOutputPath.resolve(".index");
+        Path mainIndexFile = mavenIndexDir.resolve("nexus-maven-repository-index.gz");
+        if (!Files.notExists(mainIndexFile)) {
+            return;
+        }
+        try {
+            Files.createDirectories(mavenIndexDir);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        MavenConfiguration.LOGGER.info("Performing first-time maven indexing; this may take a while.");
+        long timestamp = System.currentTimeMillis();
+        try (IndexWriter writer = new IndexWriter(new PathWritableResourceHandler(mavenIndexDir), this.repositoryId, false)) {
+            Iterator<Map<String, String>> chunkRecords = ctx.getMavenIndexRecords();
+            writer.writeChunk(chunkRecords);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Unable to write maven repository index", e);
+        }
+        MavenConfiguration.LOGGER.info("Maven indexes written to disk ({}ms)", System.currentTimeMillis() - timestamp);
+    }
+
     public void attach(Javalin server) {
         MavenPublishContext publishContext = new MavenPublishContext(this.mavenOutputPath(), this.signCmd());
+
+        if (this.maintainMavenIndex) {
+            this.ensureMavenIndexInitialized(publishContext);
+        }
+
         String prefix = this.mavenBindPrefix;
         if (prefix.codePointBefore(prefix.length()) == '/') {
             prefix = prefix.substring(0, prefix.length() - 1);
