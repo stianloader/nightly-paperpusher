@@ -60,7 +60,7 @@
         <dependency>
             <groupId>software.coley</groupId>
             <artifactId>lljzip</artifactId>
-            <version>2.3.0</version> <!-- NOTE: LLJZIP 2.4.0 uses Java 22. As of now eclipse does not support it, but once it does we should update to that version -->
+            <version>2.5.0</version>
             <scope>compile</scope>
         </dependency>
         <!-- https://stianloader.org/maven/org/stianloader/picoresolve/ -->
@@ -142,6 +142,9 @@
                             <buildArgs>
                                 <buildArg>-march=x86-64-v3</buildArg>
                                 <buildArg>-R:MaxHeapSize=64M</buildArg>
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg> <!-- Foreign API support is experimental -->
+                                <buildArg>-H:ResourceConfigurationFiles=${project.basedir}/src/assembly/resource-config.json</buildArg> <!-- Note: Graal will complain about this being experimental and there being other ways of doing that - as far as I was able to test that is not the case. This is the only way of solving our issues. -->
+                                <buildArg>-H:+ForeignAPISupport</buildArg> <!-- Required for LLJZip -->
                             </buildArgs>
                             <agent>
                                 <enabled>true</enabled>
@@ -177,7 +180,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
                 <configuration>
-                    <release>21</release>
+                    <release>22</release>
                 </configuration>
             </plugin>
             <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-source-plugin -->

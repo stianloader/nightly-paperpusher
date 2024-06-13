@@ -1,6 +1,7 @@
 package org.stianloader.paperpusher.javadocs;
 
 import java.io.IOException;
+import java.lang.foreign.ValueLayout;
 import java.lang.ref.Cleaner;
 import java.lang.ref.SoftReference;
 import java.nio.charset.StandardCharsets;
@@ -40,7 +41,6 @@ import software.coley.lljzip.ZipIO;
 import software.coley.lljzip.format.compression.UnsafeDeflateDecompressor;
 import software.coley.lljzip.format.model.LocalFileHeader;
 import software.coley.lljzip.format.model.ZipArchive;
-import software.coley.lljzip.util.ByteDataUtil;
 
 import xmlparser.XmlParser;
 import xmlparser.error.InvalidXml;
@@ -184,7 +184,7 @@ public class JavadocUnpackContext {
         }
         final byte[] bytes;
         try {
-            bytes = ByteDataUtil.toByteArray(localFile.decompress(UnsafeDeflateDecompressor.INSTANCE));
+            bytes = localFile.decompress(UnsafeDeflateDecompressor.INSTANCE).toArray(ValueLayout.JAVA_BYTE);
             if (bytes == null) {
                 throw new IOException("Null byte array");
             }
