@@ -23,7 +23,9 @@ public record MavenConfiguration(String signCmd, Path mavenOutputPath, String ma
     private void ensureMavenIndexInitialized(@NotNull MavenPublishContext ctx) {
         Path mavenIndexDir = this.mavenOutputPath.resolve(".index");
         Path mainIndexFile = mavenIndexDir.resolve("nexus-maven-repository-index.gz");
+
         if (!Files.notExists(mainIndexFile)) {
+            ctx.setMaintainedIndex(mainIndexFile);
             return;
         }
         try {
@@ -40,11 +42,12 @@ public record MavenConfiguration(String signCmd, Path mavenOutputPath, String ma
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to write maven repository index", e);
         }
-        MavenConfiguration.LOGGER.info("Maven indexes written to disk ({}ms)", System.currentTimeMillis() - timestamp);
+        MavenConfiguration.LOGGER.info("Maven indices written to disk ({}ms)", System.currentTimeMillis() - timestamp);
+        ctx.setMaintainedIndex(mainIndexFile);
     }
 
     public void attach(Javalin server) {
-        MavenPublishContext publishContext = new MavenPublishContext(this.mavenOutputPath(), this.signCmd());
+        MavenPublishContext publishContext = new MavenPublishContext(this.mavenOutputPath(), this.signCmd(), this.repositoryId());
 
         if (this.maintainMavenIndex) {
             this.ensureMavenIndexInitialized(publishContext);

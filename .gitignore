@@ -1,7 +1,7 @@
 .*
 !.gitignore
 target
-www
+www*
 config.*
 dependency-reduced-pom.xml
 test
