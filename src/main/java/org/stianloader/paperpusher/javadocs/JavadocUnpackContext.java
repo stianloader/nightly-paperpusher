@@ -3,6 +3,7 @@ package org.stianloader.paperpusher.javadocs;
 import java.io.IOException;
 import java.lang.ref.Cleaner;
 import java.lang.ref.SoftReference;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -23,32 +24,31 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.annotation.Nullable;
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
 
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.LoggerFactory;
 import org.stianloader.paperpusher.Paperpusher;
-import org.stianloader.paperpusher.maven.ChildElementIterable;
+import org.stianloader.paperpusher.maven.NonTextXMLIterable;
 import org.stianloader.paperpusher.maven.XMLUtil;
 import org.stianloader.picoresolve.GAV;
 import org.stianloader.picoresolve.MavenResolver;
 import org.stianloader.picoresolve.repo.MavenLocalRepositoryNegotiator;
 import org.stianloader.picoresolve.version.MavenVersion;
 import org.stianloader.picoresolve.version.VersionRange;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.xml.sax.SAXException;
 
-import io.javalin.http.ContentType;
-import io.javalin.http.Context;
-import io.javalin.http.HttpStatus;
 import software.coley.lljzip.ZipIO;
 import software.coley.lljzip.format.compression.UnsafeDeflateDecompressor;
 import software.coley.lljzip.format.model.LocalFileHeader;
 import software.coley.lljzip.format.model.ZipArchive;
 import software.coley.lljzip.util.ByteDataUtil;
+
+import xmlparser.XmlParser;
+import xmlparser.error.InvalidXml;
+import xmlparser.model.XmlElement;
+
+import io.javalin.http.ContentType;
+import io.javalin.http.Context;
+import io.javalin.http.HttpStatus;
 
 public class JavadocUnpackContext {
     @NotNull
@@ -306,35 +306,34 @@ public class JavadocUnpackContext {
             List<CompletableFuture<?>> futures = new ArrayList<>();
             MavenResolver resolver = new MavenResolver(new MavenLocalRepositoryNegotiator(this.srcPath).setWriteCacheMetadata(false));
 
+            XmlParser xmlParser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
+
             for (Path metadata : metadataFiles) {
-                Document xmlDoc;
+                XmlElement xmlDoc;
                 try {
-                    DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-                    factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-                    xmlDoc = factory.newDocumentBuilder().parse(Files.newInputStream(metadata));
-                } catch (IOException | SAXException | ParserConfigurationException e) {
+                    xmlDoc = xmlParser.fromXml(metadata);
+                } catch (IOException | InvalidXml e) {
                     LoggerFactory.getLogger(JavadocUnpackContext.class).error("Unable to parse artifact metadata {}. Skipping...", metadata, e);
                     continue;
                 }
 
-                Element metadataElement = xmlDoc.getDocumentElement();
-                metadataElement.normalize();
+                XmlElement metadataElement = xmlDoc;
 
                 Optional<String> group = XMLUtil.getValue(metadataElement, "groupId");
                 Optional<String> artifactId = XMLUtil.getValue(metadataElement, "artifactId");
-                Optional<Element> versioning = XMLUtil.getElement(metadataElement, "versioning");
+                Optional<XmlElement> versioning = XMLUtil.getElement(metadataElement, "versioning");
                 if (group.isEmpty() || artifactId.isEmpty() || versioning.isEmpty()) {
                     continue;
                 }
-                Optional<Element> versions = XMLUtil.getElement(versioning.get(), "versions");
+                Optional<XmlElement> versions = XMLUtil.getElement(versioning.get(), "versions");
                 if (versions.isEmpty()) {
                     continue;
                 }
-                for (Element version : new ChildElementIterable(versions.get())) {
-                    if (!version.getTagName().equals("version")) {
+                for (XmlElement version : new NonTextXMLIterable(versions.get())) {
+                    if (!version.name.equals("version")) {
                         continue;
                     }
-                    String ver = version.getTextContent();
+                    String ver = version.getText();
                     if (ver == null) {
                         continue;
                     }

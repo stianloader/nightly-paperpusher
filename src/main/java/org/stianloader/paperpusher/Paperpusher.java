@@ -125,6 +125,11 @@ public class Paperpusher {
                 String signCmd = maven.getString("signCmd");
                 String repoId = maven.getString("repositoryId");
                 boolean maintainMavenIndex = maven.optBoolean("maintainMavenIndex", true);
+
+                if (repoId == null) {
+                    repoId = "nighly-paperpusher-repository";
+                }
+
                 mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix, repoId, maintainMavenIndex);
             }
 //            JSONObject wiki = obj.optJSONObject("wiki");

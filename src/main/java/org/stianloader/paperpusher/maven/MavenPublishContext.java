@@ -3,7 +3,6 @@ package org.stianloader.paperpusher.maven;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -30,35 +29,28 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
-
 import org.apache.maven.index.reader.ChunkReader;
 import org.apache.maven.index.reader.IndexReader;
 import org.apache.maven.index.reader.IndexWriter;
 import org.apache.maven.index.reader.Record;
 import org.apache.maven.index.reader.Record.EntryKey;
 import org.apache.maven.index.reader.Record.Type;
-import org.apache.maven.index.reader.resource.PathWritableResourceHandler;
 import org.apache.maven.index.reader.RecordCompactor;
+import org.apache.maven.index.reader.resource.PathWritableResourceHandler;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.xml.sax.SAXException;
 
 import software.coley.lljzip.ZipIO;
 import software.coley.lljzip.format.model.LocalFileHeader;
 import software.coley.lljzip.format.model.ZipArchive;
+
+import xmlparser.XmlParser;
+import xmlparser.error.InvalidXml;
+import xmlparser.model.XmlElement;
 
 public class MavenPublishContext {
 
@@ -81,21 +73,16 @@ public class MavenPublishContext {
             return version;
         }
 
-        Document xmlDoc;
-        try (InputStream is = Files.newInputStream(index)) {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            xmlDoc = factory.newDocumentBuilder().parse(is);
-        } catch (SAXException | ParserConfigurationException e) {
-            LOGGER.error("Unable to read Maven metadata file: Parser reading exception", e);
+        XmlElement metadata;
+        try {
+            metadata = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build().fromXml(index);
+        } catch (InvalidXml e) {
+            LOGGER.error("Unable to read A-level maven metadata file: Parser reading exception", e);
             return version;
         } catch (IOException e) {
-            LOGGER.warn("Unable to clearly read maven index '{}'! Consider it as not existing.", index, e);
+            LOGGER.warn("Unable to clearly read A-level maven metadata '{}'! Consider it as not existing.", index, e);
             return version;
         }
-
-        Element metadata = xmlDoc.getDocumentElement();
-        metadata.normalize();
 
         if (!XMLUtil.getValue(metadata, "groupId").get().equals(group)
                 || !XMLUtil.getValue(metadata, "artifactId").get().equals(artifact)) {
@@ -103,16 +90,19 @@ public class MavenPublishContext {
             return version;
         }
 
-        Element versioningElement = XMLUtil.getElement(metadata, "versioning").get();
-        Optional<Element> versions = XMLUtil.getElement(versioningElement, "versions");
+        XmlElement versioningElement = XMLUtil.getElement(metadata, "versioning").get();
+        Optional<XmlElement> versions = XMLUtil.getElement(versioningElement, "versions");
 
         Set<String> knownVersions = new HashSet<>();
         if (versions.isPresent()) {
-            for (Element versionElement : new ChildElementIterable(versions.get())) {
-                if (!versionElement.getTagName().equals("version")) {
+            for (XmlElement versionElement : new NonTextXMLIterable(versions.get())) {
+                if (!versionElement.name.equals("version")) {
                     continue;
                 }
-                knownVersions.add(versionElement.getTextContent());
+                String text = versionElement.getText();
+                if (text != null) {
+                    knownVersions.add(text);
+                }
             }
         }
 
@@ -272,23 +262,19 @@ public class MavenPublishContext {
     }
 
     private static final byte @Nullable[] updateMavenMetadata(Map<GAV, String> mappedVersions, byte[] originData) {
-        Document xmlDoc;
+        XmlElement metadata;
+        XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
         try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            xmlDoc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(originData));
-        } catch (IOException | SAXException | ParserConfigurationException e) {
-            LOGGER.error("Unable to readdress Maven metadata file: Parser reading exception", e);
+            metadata = parser.fromXml(new ByteArrayInputStream(originData));
+        } catch (InvalidXml | IOException e) {
+            LOGGER.error("Unable to update A-level maven metadata file", e);
             return null;
         }
-
-        Element metadata = xmlDoc.getDocumentElement();
-        metadata.normalize();
 
         String group = XMLUtil.getValue(metadata, "groupId").get();
         String artifact = XMLUtil.getValue(metadata, "artifactId").get();
 
-        Element versioningElement = XMLUtil.getElement(metadata, "versioning").get();
+        XmlElement versioningElement = XMLUtil.getElement(metadata, "versioning").get();
         Optional<String> latest = XMLUtil.getValue(versioningElement, "latest");
         Optional<String> release = XMLUtil.getValue(versioningElement, "release");
 
@@ -300,59 +286,46 @@ public class MavenPublishContext {
             XMLUtil.updateValue(versioningElement, "release", mappedVersions.getOrDefault(new GAV(group, artifact, release.get()), release.get()));
         }
 
-        Optional<Element> versions = XMLUtil.getElement(versioningElement, "versions");
+        Optional<XmlElement> versions = XMLUtil.getElement(versioningElement, "versions");
 
         if (versions.isPresent()) {
-            for (Element version : new ChildElementIterable(versions.get())) {
-                if (!version.getTagName().equals("version")) {
+            for (XmlElement version : new NonTextXMLIterable(versions.get())) {
+                if (!version.name.equals("version")) {
                     continue;
                 }
-                String ver = version.getTextContent();
-                version.setTextContent(mappedVersions.getOrDefault(new GAV(group, artifact, ver), ver));
+                String ver = version.getText();
+                if (ver == null) {
+                    continue;
+                }
+                version.setText(mappedVersions.getOrDefault(new GAV(group, artifact, ver), ver));
             }
         }
 
-        try {
-            TransformerFactory factory = TransformerFactory.newDefaultInstance();
-            factory.setURIResolver(null);
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            DOMSource source = new DOMSource(xmlDoc);
-            try (ByteArrayOutputStream baos = new ByteArrayOutputStream(originData.length)) {
-                StreamResult result = new StreamResult(baos);
-                factory.newTransformer().transform(source, result);
-                return baos.toByteArray();
-            }
-        } catch (TransformerException | IOException e) {
-            LOGGER.error("Unable to readdress Maven metadata file: Transformer writing exception", e);
-            return null;
-        }
+        return parser.domToXml(metadata).getBytes(StandardCharsets.UTF_8);
     }
 
     private static final byte @Nullable[] updatePOM(Map<GAV, String> mappedVersions, byte[] originData, GAV originGAV) {
-        Document xmlDoc;
+        XmlElement project;
+        XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
         try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            xmlDoc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(originData));
-        } catch (IOException | SAXException | ParserConfigurationException e) {
+            project = parser.fromXml(new ByteArrayInputStream(originData));
+        } catch (IOException | InvalidXml e) {
             LOGGER.error("Unable to readdress POM: Parser reading exception", e);
             return null;
         }
-        Element project = xmlDoc.getDocumentElement();
-        project.normalize();
 
-        for (Element blockElem : new ChildElementIterable(project)) {
-            if (!blockElem.getTagName().equals("dependencies") && !blockElem.getTagName().equals("parent")) {
+        for (XmlElement blockElem : new NonTextXMLIterable(project)) {
+            if (!blockElem.name.equals("dependencies") && !blockElem.name.equals("parent")) {
                 continue;
             }
-            Iterable<Element> it;
-            if (blockElem.getTagName().equals("parent")) {
+            Iterable<XmlElement> it;
+            if (blockElem.name.equals("parent")) {
                 // small hack, IK
                 it = Collections.singleton(blockElem);
             } else {
-                it = new ChildElementIterable(blockElem);
+                it = new NonTextXMLIterable(blockElem);
             }
-            for (Element dep : it) {
+            for (XmlElement dep : it) {
                 Optional<String> group = XMLUtil.getValue(dep, "groupId");
                 Optional<String> artifact = XMLUtil.getValue(dep, "artifactId");
                 Optional<String> version = XMLUtil.getValue(dep, "version");
@@ -371,20 +344,7 @@ public class MavenPublishContext {
             LOGGER.warn("Unable to update version of POM {}?", originGAV);
         }
 
-        try {
-            TransformerFactory factory = TransformerFactory.newDefaultInstance();
-            factory.setURIResolver(null);
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            DOMSource source = new DOMSource(xmlDoc);
-            try (ByteArrayOutputStream baos = new ByteArrayOutputStream(originData.length)) {
-                StreamResult result = new StreamResult(baos);
-                factory.newTransformer().transform(source, result);
-                return baos.toByteArray();
-            }
-        } catch (TransformerException | IOException e) {
-            LOGGER.error("Unable to readdress POM: Transformer writing exception", e);
-            return null;
-        }
+        return parser.domToXml(project).getBytes(StandardCharsets.UTF_8);
     }
     private static void writeChecksum(Path nonchecksumFile, byte[] nonchecksumFileContents) {
         writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha512"), nonchecksumFileContents, "SHA-512");
@@ -688,35 +648,31 @@ public class MavenPublishContext {
 
         List<Map<String, String>> records = new ArrayList<>();
 
+        XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
         for (Path metadata : metadataFiles) {
-            Document xmlDoc;
+            XmlElement metadataElement;
             try {
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-                factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-                xmlDoc = factory.newDocumentBuilder().parse(Files.newInputStream(metadata));
-            } catch (IOException | SAXException | ParserConfigurationException e) {
+                metadataElement = parser.fromXml(metadata);
+            } catch (IOException | InvalidXml e) {
                 MavenPublishContext.LOGGER.error("Unable to parse artifact metadata {}. Skipping...", metadata, e);
                 continue;
             }
 
-            Element metadataElement = xmlDoc.getDocumentElement();
-            metadataElement.normalize();
-
             Optional<String> group = XMLUtil.getValue(metadataElement, "groupId");
             Optional<String> artifactId = XMLUtil.getValue(metadataElement, "artifactId");
-            Optional<Element> versioning = XMLUtil.getElement(metadataElement, "versioning");
+            Optional<XmlElement> versioning = XMLUtil.getElement(metadataElement, "versioning");
             if (group.isEmpty() || artifactId.isEmpty() || versioning.isEmpty()) {
                 continue;
             }
-            Optional<Element> versions = XMLUtil.getElement(versioning.get(), "versions");
+            Optional<XmlElement> versions = XMLUtil.getElement(versioning.get(), "versions");
             if (versions.isEmpty()) {
                 continue;
             }
-            for (Element version : new ChildElementIterable(versions.get())) {
-                if (!version.getTagName().equals("version")) {
+            for (XmlElement version : new NonTextXMLIterable(versions.get())) {
+                if (!version.name.equals("version")) {
                     continue;
                 }
-                String ver = version.getTextContent();
+                String ver = version.name;
                 if (ver == null) {
                     continue;
                 }
@@ -747,18 +703,13 @@ public class MavenPublishContext {
                             // These checksums are not used, so we will skip them
                             continue;
                         } else if (filename.endsWith(".pom")) {
-                            Document pomDoc;
+                            XmlElement pomElement;
                             try {
-                                DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-                                factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-                                pomDoc = factory.newDocumentBuilder().parse(Files.newInputStream(file));
-                            } catch (IOException | SAXException | ParserConfigurationException e) {
+                                pomElement = parser.fromXml(file);
+                            } catch (IOException | InvalidXml e) {
                                 MavenPublishContext.LOGGER.error("Unable to parse artifact POM {}. Skipping...", file, e);
                                 continue;
                             }
-
-                            Element pomElement = pomDoc.getDocumentElement();
-                            pomElement.normalize();
 
                             packaging = XMLUtil.getValue(pomElement, "packaging").orElse("jar");
                             name = XMLUtil.getValue(pomElement, "name").orElse(null);
@@ -916,26 +867,22 @@ public class MavenPublishContext {
 
         Map<GAV, POMDetails> poms = new HashMap<>();
 
+        XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
         for (Map.Entry<MavenArtifact, byte[]> entry : addedArtifacts.entrySet()) {
             MavenArtifact addedArtifact = entry.getKey();
-            byte[] artifactContents = entry.getValue();
 
             if ((addedArtifact.classifier != null && !addedArtifact.type.isEmpty()) || !addedArtifact.type.equals("pom")) {
                 continue;
             }
 
-            Document pomDoc;
+            byte[] artifactContents = entry.getValue();
+            XmlElement pomElement;
             try {
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newDefaultInstance();
-                factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-                pomDoc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(artifactContents));
-            } catch (IOException | SAXException | ParserConfigurationException e) {
+                pomElement = parser.fromXml(new ByteArrayInputStream(artifactContents));
+            } catch (IOException | InvalidXml e) {
                 MavenPublishContext.LOGGER.error("Unable to parse artifact POM {}. Skipping...", addedArtifact, e);
                 continue;
             }
-
-            Element pomElement = pomDoc.getDocumentElement();
-            pomElement.normalize();
 
             String packaging = XMLUtil.getValue(pomElement, "packaging").orElse("jar");
             String name = XMLUtil.getValue(pomElement, "name").orElse(null);

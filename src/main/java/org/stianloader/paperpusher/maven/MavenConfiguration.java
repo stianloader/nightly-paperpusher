@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
 
-public record MavenConfiguration(String signCmd, Path mavenOutputPath, String mavenBindPrefix, String repositoryId, boolean maintainMavenIndex) {
+public record MavenConfiguration(String signCmd, Path mavenOutputPath, String mavenBindPrefix, @NotNull String repositoryId, boolean maintainMavenIndex) {
 
     public static final Logger LOGGER = LoggerFactory.getLogger(MavenConfiguration.class);
 

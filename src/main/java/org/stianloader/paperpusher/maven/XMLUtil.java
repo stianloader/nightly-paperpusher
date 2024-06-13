@@ -1,56 +1,32 @@
 package org.stianloader.paperpusher.maven;
 
-import java.util.Iterator;
 import java.util.Optional;
 
-import org.jetbrains.annotations.NotNull;
-import org.w3c.dom.Element;
+import xmlparser.model.XmlElement;
 
 public class XMLUtil {
 
-    public static Optional<String> getValue(Element parent, String key) {
-        Iterator<Element> it = new ChildElementIterable.NodeListElementIterator(parent.getElementsByTagName(key));
-
-        while (it.hasNext()) {
-            Element e = it.next();
-            // Yes, getElementsByTagName is recursive
-            if (e.getParentNode() != parent) {
-                continue;
-            }
-            return Optional.of(e.getTextContent());
+    public static Optional<String> getValue(XmlElement parent, String key) {
+        XmlElement element = parent.findChildForName(key, null);
+        if (element == null) {
+            return Optional.empty();
         }
 
-        return Optional.empty();
+        String text = element.getText();
+        return Optional.of(text == null ? "" : text);
     }
 
-    public static boolean updateValue(Element parent, String key, String value) {
-        Iterator<Element> it = new ChildElementIterable.NodeListElementIterator(parent.getElementsByTagName(key));
-
-        while (it.hasNext()) {
-            Element e = it.next();
-            // Yes, getElementsByTagName is recursive
-            if (e.getParentNode() != parent) {
-                continue;
-            }
-            e.setTextContent(value);
-            return true;
+    public static boolean updateValue(XmlElement parent, String key, String value) {
+        XmlElement element = parent.findChildForName(key, null);
+        if (element == null) {
+            return false;
         }
 
-        return false;
+        element.setText(value);
+        return true;
     }
 
-    public static Optional<Element> getElement(Element parent, String key) {
-        Iterator<@NotNull Element> it = new ChildElementIterable.NodeListElementIterator(parent.getElementsByTagName(key));
-
-        while (it.hasNext()) {
-            Element e = it.next();
-            // Yes, getElementsByTagName is recursive
-            if (e.getParentNode() != parent) {
-                continue;
-            }
-            return Optional.of(e);
-        }
-
-        return Optional.empty();
+    public static Optional<XmlElement> getElement(XmlElement parent, String key) {
+        return Optional.ofNullable(parent.findChildForName(key, null));
     }
 }
