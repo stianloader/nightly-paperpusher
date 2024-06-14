@@ -22,6 +22,15 @@ If you absolutely need to expose that part of the repository publicly, please
 create an issue on this repository beforehand and use a reverse-proxy
 that performs the necessary AAA.
 
+## Notable features
+
+Besides being something that stores maven artifacts to disk, nightly-paperpusher has
+following notable features:
+
+- Artifacts are indexed using the nexus-maven-repository-index
+- Javadocs can easily be obtained via an endpoint
+- This application is developed to be run using graal native-image first and foremost
+
 ## Endpoints
 
 **Note that the maven publication endpoint is intended to be hidden behind a firewall.**
@@ -109,7 +118,5 @@ The cost of graal would be a slower repository overall, but that is usually
 acceptable unless you have very high throughput (which this software is not designed
 to handle anyways).
 
-However, if you choose to compile with graal, then be aware that you need
-to run it's javaagent first and execute the `/maven/commit` endpoint
-after staging junk to it as otherwise graal will become confused with the XML
-processing API provided by java.
+Just execute the `graal-compile` script with Graal 22 as your current JVM and
+you are good to go!

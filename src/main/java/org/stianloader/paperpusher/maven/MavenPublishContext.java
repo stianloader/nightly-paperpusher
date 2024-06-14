@@ -672,7 +672,7 @@ public class MavenPublishContext {
                 if (!version.name.equals("version")) {
                     continue;
                 }
-                String ver = version.name;
+                String ver = version.getText();
                 if (ver == null) {
                     continue;
                 }
@@ -749,8 +749,9 @@ public class MavenPublishContext {
                     Map<EntryKey, Object> expanded = new HashMap<>();
 
                     Path sha1csumFile = sha1csum.get(entry.file.getFileName().toString());
+
                     checksum:
-                    if (Files.exists(sha1csumFile)) {
+                    if (sha1csumFile != null && Files.exists(sha1csumFile)) {
                         String checksum = Files.readString(sha1csumFile, StandardCharsets.UTF_8).replace("\n", "").replace("\r", "");
                         if (checksum.length() != 40) {
                             MavenPublishContext.LOGGER.warn("Potentially invalid checksum file: '{}'; skipping it.", sha1csumFile);
