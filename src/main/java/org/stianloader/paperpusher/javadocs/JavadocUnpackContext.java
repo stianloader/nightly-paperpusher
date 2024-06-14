@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.LoggerFactory;
+import org.stianloader.paperpusher.LLJZipUtils;
 import org.stianloader.paperpusher.Paperpusher;
 import org.stianloader.paperpusher.maven.NonTextXMLIterable;
 import org.stianloader.paperpusher.maven.XMLUtil;
@@ -38,7 +39,6 @@ import org.stianloader.picoresolve.version.MavenVersion;
 import org.stianloader.picoresolve.version.VersionRange;
 
 import software.coley.lljzip.ZipIO;
-import software.coley.lljzip.format.compression.UnsafeDeflateDecompressor;
 import software.coley.lljzip.format.model.LocalFileHeader;
 import software.coley.lljzip.format.model.ZipArchive;
 
@@ -184,7 +184,7 @@ public class JavadocUnpackContext {
         }
         final byte[] bytes;
         try {
-            bytes = localFile.decompress(UnsafeDeflateDecompressor.INSTANCE).toArray(ValueLayout.JAVA_BYTE);
+            bytes = localFile.decompress(LLJZipUtils.getDecompressor()).toArray(ValueLayout.JAVA_BYTE);
             if (bytes == null) {
                 throw new IOException("Null byte array");
             }

@@ -1,2 +1,2 @@
 #!/bin/sh
-mvn -Pnative package
+mvn clean -Pnative package
