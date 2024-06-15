@@ -4,7 +4,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.stianloader</groupId>
     <artifactId>nightly-paperpusher</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
     <name>Nightly Paperpusher</name>
     <description>Maven repository uploading interface</description>
     <inceptionYear>2023</inceptionYear>

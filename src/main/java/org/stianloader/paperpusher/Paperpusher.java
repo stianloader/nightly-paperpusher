@@ -5,16 +5,24 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ForkJoinPool;
 
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.stianloader.paperpusher.javadocs.JavadocConfiguration;
 import org.stianloader.paperpusher.maven.MavenConfiguration;
+import org.stianloader.picoresolve.version.VersionRange;
 
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
@@ -91,6 +99,7 @@ public class Paperpusher {
         JSONObject jdConfig = new JSONObject();
         jdConfig.put("prefix", "/javadocs/");
         jdConfig.put("inputPath", "www/");
+        jdConfig.put("indexExclusions", new JSONObject().put("org.example.group", new JSONObject().put("example-project", new JSONArray().put("1.0.0-example").put("[0-min-version,0.1-max-version)"))));
         cfg.put("maxRequestSize", 1_000_000L);
         cfg.put("maven", mvnConfig);
         cfg.put("javadocs", jdConfig);
@@ -152,7 +161,30 @@ public class Paperpusher {
             } else {
                 String prefix = javadocs.getString("prefix");
                 String inPath = javadocs.getString("inputPath");
-                jdCfg = new JavadocConfiguration(Path.of(inPath), prefix);
+                Map<String, Map<String, List<VersionRange>>> indexExclusions = new HashMap<>();
+                {
+                    JSONObject o = javadocs.optJSONObject("indexExclusions");
+                    if (o != null) {
+                        Iterator<String> groupIdIt = o.keys();
+                        while (groupIdIt.hasNext()) {
+                            String groupid = groupIdIt.next();
+                            Map<String, List<VersionRange>> groupExclusions = new HashMap<>();
+                            indexExclusions.put(groupid, groupExclusions);
+                            JSONObject artifacts = o.getJSONObject(groupid);
+                            Iterator<String> artifactIdIt = artifacts.keys();
+                            while (artifactIdIt.hasNext()) {
+                                String artifactId = artifactIdIt.next();
+                                List<VersionRange> versionExclusions = new ArrayList<>();
+                                groupExclusions.put(artifactId, versionExclusions);
+                                JSONArray versions = artifacts.getJSONArray(artifactId);
+                                for (int i = versions.length(); i-- != 0;) {
+                                    versionExclusions.add(VersionRange.parse(Objects.requireNonNull(versions.getString(i))));
+                                }
+                            }
+                        }
+                    }
+                }
+                jdCfg = new JavadocConfiguration(Path.of(inPath), prefix, indexExclusions);
             }
 
             return new PaperpusherConfig(bindAddress, port, maxRequestSize, mavenCfg, jdCfg);

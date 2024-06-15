@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
@@ -56,13 +57,13 @@ public class JavadocUnpackContext {
 
     private static class JarCacheRecord {
         @NotNull
+        private final AtomicReference<ZipArchive> archive = new AtomicReference<>();
+        @NotNull
         private final AtomicLong lastAccess = new AtomicLong();
         @NotNull
         private final AtomicBoolean lockUpdate = new AtomicBoolean();
         @NotNull
         private final AtomicBoolean readable = new AtomicBoolean();
-        @NotNull
-        private final AtomicReference<ZipArchive> archive = new AtomicReference<>();
     }
 
     @NotNull
@@ -93,8 +94,12 @@ public class JavadocUnpackContext {
 
     private static final long ARTIFACT_LISTING_INTERVALL = 5 * 60 * 1000L;
 
-    public JavadocUnpackContext(@NotNull Path srcPath) {
+    @NotNull
+    private final Map<String, Map<String, List<VersionRange>>> indexExclusions;
+
+    public JavadocUnpackContext(@NotNull Path srcPath, @NotNull Map<String, Map<String, List<VersionRange>>> indexExclusions) {
         this.srcPath = srcPath;
+        this.indexExclusions = indexExclusions;
     }
 
     public void fetchContent(String group, String artifact, String version, String internalPath,
@@ -329,6 +334,7 @@ public class JavadocUnpackContext {
                 if (versions.isEmpty()) {
                     continue;
                 }
+                versionIterator:
                 for (XmlElement version : new NonTextXMLIterable(versions.get())) {
                     if (!version.name.equals("version")) {
                         continue;
@@ -337,7 +343,13 @@ public class JavadocUnpackContext {
                     if (ver == null) {
                         continue;
                     }
-                    GAV gav = new GAV(group.get(), artifactId.get(), MavenVersion.parse(ver));
+                    MavenVersion artifactVersion = MavenVersion.parse(ver);
+                    for (VersionRange excludedVersion : this.indexExclusions.getOrDefault(group.get(), Collections.emptyMap()).getOrDefault(artifactId.get(), Collections.emptyList())) {
+                        if (excludedVersion.containsVersion(artifactVersion)) {
+                            continue versionIterator;
+                        }
+                    }
+                    GAV gav = new GAV(group.get(), artifactId.get(), artifactVersion);
                     futures.add(resolver.download(gav, "javadoc", "jar", Executors.newVirtualThreadPerTaskExecutor()).exceptionally((ex) -> {
                         return null;
                     }).thenAccept((value) -> {

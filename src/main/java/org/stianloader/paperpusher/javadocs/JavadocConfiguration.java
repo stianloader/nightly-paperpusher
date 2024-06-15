@@ -1,17 +1,21 @@
 package org.stianloader.paperpusher.javadocs;
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.jetbrains.annotations.NotNull;
+import org.stianloader.picoresolve.version.VersionRange;
 
 import io.javalin.Javalin;
 import io.javalin.http.Handler;
 import io.javalin.http.HttpStatus;
 
-public record JavadocConfiguration(Path mavenPath, String javadocBindprefix) {
+public record JavadocConfiguration(Path mavenPath, String javadocBindprefix, @NotNull Map<String, Map<String, List<VersionRange>>> indexExclusions) {
+
     public void attach(Javalin server) {
-        JavadocUnpackContext jdContext = new JavadocUnpackContext(this.mavenPath());
+        JavadocUnpackContext jdContext = new JavadocUnpackContext(this.mavenPath(), this.indexExclusions());
         String prefix = this.javadocBindprefix;
         if (prefix.codePointBefore(prefix.length()) == '/') {
             prefix = prefix.substring(0, prefix.length() - 1);
