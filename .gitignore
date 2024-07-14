@@ -4,5 +4,5 @@ target
 www*
 config.*
 dependency-reduced-pom.xml
-test
+/test
 

@@ -54,7 +54,7 @@ import xmlparser.model.XmlElement;
 
 public class MavenPublishContext {
 
-    private static record GAV(String group, String artifact, String version) {}
+    private static record GAV(@NotNull String group, @NotNull String artifact, @NotNull String version) {}
     private static record MavenArtifact(GAV gav, String classifier, String type) {
 
         @NotNull
@@ -66,7 +66,7 @@ public class MavenPublishContext {
     private static final Logger LOGGER = LoggerFactory.getLogger(MavenPublishContext.class);
     private static final long STAGE_TIMEOUT = 15 * 60 * 1000L;
 
-    private static String discriminateVersion(Path repository, String group, String artifact, String version) {
+    private static String discriminateVersion(Path repository, String group, @NotNull String artifact, String version) {
         Path index = repository.resolve(group.replace('.', '/')).resolve(artifact).resolve("maven-metadata.xml");
 
         if (Files.notExists(index)) {
@@ -160,6 +160,7 @@ public class MavenPublishContext {
         String group = component.getString("group");
         String artifact = component.getString("module");
         String oldVersion = component.getString("version");
+        assert group != null && artifact != null && oldVersion != null;
         GAV oldGAV = new GAV(group, artifact, oldVersion);
 
         component.put("version", mappedVersions.getOrDefault(oldGAV, oldVersion));
@@ -208,7 +209,7 @@ public class MavenPublishContext {
                 }
 
                 // Attempt to locate said file
-                String mappedVersion = mappedVersions.getOrDefault(oldGAV, oldVersion);
+                String mappedVersion = Objects.requireNonNull(mappedVersions.getOrDefault(oldGAV, oldVersion));
                 String mappedName = artifact + '-' + mappedVersion;
                 MavenArtifact fileArtifact = new MavenArtifact(new GAV(group, artifact, mappedVersion), classifier, type);
                 byte[] fileData = mappedArtifacts.get(fileArtifact);
@@ -238,10 +239,12 @@ public class MavenPublishContext {
                     JSONObject dependency = dependencies.getJSONObject(j);
                     String dependencyGroup = dependency.getString("group");
                     String dependencyArtifact = dependency.getString("module");
+                    assert dependencyGroup != null && dependencyArtifact != null;
                     JSONObject versions = dependency.getJSONObject("version");
 
                     for (String key : versions.keySet()) {
                         String dependencyVersion = versions.getString(key);
+                        assert dependencyVersion != null;
                         GAV dependencyGAV = new GAV(dependencyGroup, dependencyArtifact, dependencyVersion);
                         String dependencyMappedVersion = mappedVersions.get(dependencyGAV);
 
@@ -401,7 +404,7 @@ public class MavenPublishContext {
 
         // TODO verify checksums
 
-        record GA(String group, String artifact) {};
+        record GA(@NotNull String group, @NotNull String artifact) {};
 
         Map<MavenArtifact, byte[]> artifacts = new HashMap<>();
         Map<GA, byte[]> mavenMetadata = new HashMap<>();
@@ -487,7 +490,7 @@ public class MavenPublishContext {
             final GAV originGAV = artifact.gav;
 
             byte[] transformedData = originData;
-            GAV transformedGAV = new GAV(originGAV.group, originGAV.artifact, mappedVersions.getOrDefault(originGAV, originGAV.version));
+            GAV transformedGAV = new GAV(originGAV.group, originGAV.artifact, Objects.requireNonNull(mappedVersions.getOrDefault(originGAV, originGAV.version)));
 
             if (artifact.type.equals("jar")) {
                 try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -566,7 +569,7 @@ public class MavenPublishContext {
 
                 MavenArtifact originArtifact = entry.getKey();
                 GAV originGAV = originArtifact.gav;
-                GAV transformedGAV = new GAV(originGAV.group, originGAV.artifact, mappedVersions.getOrDefault(originGAV, originGAV.version));
+                GAV transformedGAV = new GAV(originGAV.group, originGAV.artifact, Objects.requireNonNull(mappedVersions.getOrDefault(originGAV, originGAV.version)));
                 readdressedArtifacts.put(new MavenArtifact(transformedGAV, originArtifact.classifier, originArtifact.type), data);
                 return true;
             }
@@ -886,6 +889,7 @@ public class MavenPublishContext {
             }
 
             String packaging = XMLUtil.getValue(pomElement, "packaging").orElse("jar");
+            assert packaging != null;
             String name = XMLUtil.getValue(pomElement, "name").orElse(null);
             String description = XMLUtil.getValue(pomElement, "description").orElse(null);
             poms.put(addedArtifact.gav, new POMDetails(packaging, name, description));
