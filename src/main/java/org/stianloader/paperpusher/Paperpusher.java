@@ -22,6 +22,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.stianloader.paperpusher.javadocs.JavadocConfiguration;
 import org.stianloader.paperpusher.maven.MavenConfiguration;
+import org.stianloader.paperpusher.maven.MavenPublishContext;
+import org.stianloader.paperpusher.search.SearchContext;
+import org.stianloader.paperpusher.search.SearchContext.SearchConfiguration;
 import org.stianloader.picoresolve.version.VersionRange;
 
 import io.javalin.Javalin;
@@ -59,7 +62,13 @@ public class Paperpusher {
 
         MavenConfiguration mvnConfig = cfg.maven();
         if (mvnConfig != null) {
-            mvnConfig.attach(javalinServer);
+            MavenPublishContext mavenContext = mvnConfig.attach(javalinServer);
+            SearchConfiguration searchCfg = cfg.search();
+            if (searchCfg != null) {
+                new SearchContext(searchCfg).attach(javalinServer, mavenContext);
+            }
+        } else if (cfg.search() != null) {
+            Paperpusher.LOGGER.error("Unsupported/Unexpected configuration state: Search configuration != null even though maven configuration == null.");
         }
 
         JavadocConfiguration jdConfig = cfg.javadoc();
@@ -94,8 +103,10 @@ public class Paperpusher {
         mvnConfig.put("prefix", "/maven/");
         mvnConfig.put("signCmd", "");
         mvnConfig.put("outputPath", "www/");
-        mvnConfig.put("repositoryId", "paperpusher_repo");
-        mvnConfig.put("maintainMavenIndex", true);
+        JSONObject searchConfig = new JSONObject();
+        searchConfig.put("prefix", "/search/");
+        searchConfig.put("repositoryId", "paperpusher_repo");
+        searchConfig.put("maintainMavenIndex", true);
         JSONObject jdConfig = new JSONObject();
         jdConfig.put("prefix", "/javadocs/");
         jdConfig.put("inputPath", "www/");
@@ -103,6 +114,7 @@ public class Paperpusher {
         cfg.put("maxRequestSize", 1_000_000L);
         cfg.put("maven", mvnConfig);
         cfg.put("javadocs", jdConfig);
+        cfg.put("search", searchConfig);
 
         try {
             Files.writeString(at, cfg.toString(2), StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
@@ -132,15 +144,33 @@ public class Paperpusher {
                 String prefix = maven.getString("prefix");
                 String outPath = maven.getString("outputPath");
                 String signCmd = maven.getString("signCmd");
-                String repoId = maven.getString("repositoryId");
-                boolean maintainMavenIndex = maven.optBoolean("maintainMavenIndex", true);
+
+                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix);
+            }
+
+            SearchConfiguration searchCfg;
+            JSONObject search = obj.optJSONObject("search");
+            if (search == null) {
+                Paperpusher.LOGGER.warn("Search configuration section missing; Paperpusher's maven repository indexing and search integration disabled.");
+                searchCfg = null;
+            } else if (mavenCfg == null) {
+                Paperpusher.LOGGER.error("Maven configuration section missing even though the search config is present; Paperpusher's maven repository indexing and search integration disabled.");
+                searchCfg = null;
+            } else {
+                String repoId = search.getString("repositoryId");
+                String searchBindPrefix = search.getString("prefix");
+                boolean maintainMavenIndex = search.optBoolean("maintainMavenIndex", true);
+                if (!maintainMavenIndex) {
+                    Paperpusher.LOGGER.warn("Search configuration is requested to not maintain a maven index, but this functionality is not supported at this point in time.");
+                }
 
                 if (repoId == null) {
                     repoId = "nighly-paperpusher-repository";
                 }
 
-                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix, repoId, maintainMavenIndex);
+                searchCfg = new SearchConfiguration(mavenCfg.mavenOutputPath(), searchBindPrefix, repoId);
             }
+
 //            JSONObject wiki = obj.optJSONObject("wiki");
 //            MavenConfiguration wikiCfg;
 //            if (maven == null) {
@@ -187,7 +217,7 @@ public class Paperpusher {
                 jdCfg = new JavadocConfiguration(Path.of(inPath), prefix, indexExclusions);
             }
 
-            return new PaperpusherConfig(bindAddress, port, maxRequestSize, mavenCfg, jdCfg);
+            return new PaperpusherConfig(bindAddress, port, maxRequestSize, mavenCfg, jdCfg, searchCfg);
         } catch (IOException | RuntimeException e) {
             Paperpusher.LOGGER.error("Unable to read configuration", e);
             return null;
