@@ -5,4 +5,4 @@ www*
 config.*
 dependency-reduced-pom.xml
 /test
-
+*.db

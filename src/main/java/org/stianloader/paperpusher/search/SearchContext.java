@@ -6,6 +6,12 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -56,18 +62,59 @@ public class SearchContext {
     private final SearchConfiguration config;
     @NotNull
     private final Path mavenIndexDir;
+    @NotNull
+    private final Connection searchDatabaseConnection;
 
     public SearchContext(@NotNull SearchConfiguration config) {
         this.config = config;
         this.mavenIndexDir = this.config.repositoryPath.resolve(".index");
+        try {
+            this.searchDatabaseConnection = Objects.requireNonNull(DriverManager.getConnection("jdbc:sqlite:paperpusher-search-indices.db"));
+        } catch (SQLException e) {
+            throw new RuntimeException("Cannot connect to search indices database.", e);
+        }
     }
 
     public void attach(Javalin server, MavenPublishContext publish) {
         this.ensureMavenIndexInitialized();
+        this.ensureDatabaseInitialized();
         if (this.aborted) {
             throw new IllegalStateException("Aborted execution");
         }
         publish.addPublicationListener(this::updateMavenIndex);
+    }
+
+    private void ensureDatabaseInitialized() {
+        if (this.aborted) {
+            return;
+        }
+
+        try {
+            DatabaseMetaData meta = this.searchDatabaseConnection.getMetaData();
+            ResultSet tables = meta.getTables(null, null, "artifacts", null);
+            if (tables.getFetchSize() != 0) {
+                SearchContext.LOGGER.info("Search indices assumed up-to-date.");
+                return; // DB up to date
+            }
+        } catch (SQLException e) {
+            this.aborted = true;
+            throw new RuntimeException("Unable to check for table existence", e);
+        }
+
+        SearchContext.LOGGER.info("Search indices assumed missing or outdated; rebuilding.");
+
+        record Artifact(int rowId, String groupId, String artifactId) {}
+        record Version(int rowId, int artifactRowId, String versionString) {}
+        record Changeset(int rowId, int versionRowId, String className, String memberName, String memberDesc, int alerationType) {}
+
+        try (Statement statement = this.searchDatabaseConnection.createStatement()) {
+            statement.execute("CREATE TABLE artifact (rowid INTEGER PRIMARY KEY AUTOINCREMENT, groupId TEXT NOT NULL, artifactId TEXT NOT NULL);");
+            statement.execute("CREATE TABLE version (rowid INTEGER PRIMARY KEY AUTOINCREMENT, artifactRowId INTEGER NOT NULL REFERENCES artifact(rowid), versionString TEXT NOT NULL);");
+            statement.execute("CREATE TABLE memberDelta (rowid INTEGER PRIMARY KEY AUTOINCREMENT, versionRowId INTEGER NOT NULL REFERENCES version(rowid), className TEXT NOT NULL, memberDesc TEXT NOT NULL, alterationType INTEGER NOT NULL);");
+        } catch (SQLException e) {
+            this.aborted = true;
+            throw new RuntimeException("Unable to create presumably missing table.", e);
+        }
     }
 
     private void ensureMavenIndexInitialized() {
@@ -369,7 +416,7 @@ public class SearchContext {
                     // According to the documentation, CLASSNAMES must be a java.util.List
                     // But the documentation is a lie, in reality it is a String[]!
                     // oh, and indexer-reader has a bug where it'll use `|` as a entry separator, even though it actually is `\n`.
-                    // See: https://issues.apache.org/jira/projects/MINDEXER/issues/MINDEXER-225
+                    // See: https://github.com/apache/maven-indexer/issues/668
                     expanded.put(Record.CLASSNAMES, new String[] {String.join("\n", classNames)});
                 } catch (IOException e) {
                     SearchContext.LOGGER.warn("Unable to enumerate classes for jar '{}'; Discarding.", addedArtifact);
