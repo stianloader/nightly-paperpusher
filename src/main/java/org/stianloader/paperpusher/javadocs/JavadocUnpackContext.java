@@ -189,7 +189,7 @@ public class JavadocUnpackContext {
         }
         final byte[] bytes;
         try {
-            bytes = localFile.decompress(LLJZipUtils.getDecompressor()).toArray(ValueLayout.JAVA_BYTE);
+            bytes = localFile.decompress(LLJZipUtils.getDecompressor(localFile)).toArray(ValueLayout.JAVA_BYTE);
             if (bytes == null) {
                 throw new IOException("Null byte array");
             }

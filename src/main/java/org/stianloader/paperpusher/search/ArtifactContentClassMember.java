@@ -1,11 +1,24 @@
 package org.stianloader.paperpusher.search;
 
+import java.util.Objects;
+
+import org.jetbrains.annotations.NotNull;
+
+import software.coley.cafedude.classfile.ClassMember;
+
 public class ArtifactContentClassMember implements Comparable<ArtifactContentClassMember> {
+    @NotNull
     public final String desc;
+    @NotNull
     public final String name;
+    @NotNull
     public final String owner;
 
-    public ArtifactContentClassMember(String owner, String name, String desc) {
+    public ArtifactContentClassMember(@NotNull String owner, @NotNull ClassMember member) {
+        this(owner, Objects.requireNonNull(member.getName().getText()), Objects.requireNonNull(member.getType().getText()));
+    }
+
+    public ArtifactContentClassMember(@NotNull String owner, @NotNull String name, @NotNull String desc) {
         this.owner = owner;
         this.name = name;
         this.desc = desc;
@@ -26,6 +39,20 @@ public class ArtifactContentClassMember implements Comparable<ArtifactContentCla
             return ret;
         }
         return this.desc.compareTo(o.desc);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!(obj instanceof ArtifactContentClassMember)) {
+            return false;
+        }
+        ArtifactContentClassMember other = (ArtifactContentClassMember) obj;
+        return this.owner.equals(other.owner) && this.name.equals(other.name) && this.desc.equals(other.desc);
+    }
+
+    @Override
+    public int hashCode() {
+        return this.owner.hashCode() ^ this.name.hashCode() ^ this.desc.hashCode();
     }
 
     @Override
