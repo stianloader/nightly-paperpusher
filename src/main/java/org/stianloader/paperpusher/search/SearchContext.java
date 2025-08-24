@@ -158,6 +158,9 @@ public class SearchContext {
         SearchContext.LOGGER.info("Inserting data:");
 
         try {
+            // Auto-commit can result in the database taking several minutes to insert the entire data
+            // as it very frequently creates and deletes DB journals. Hence: Gone with that feature!
+            this.searchDatabaseConnection.setAutoCommit(false);
             SearchContext.LOGGER.info("  Inserting project data");
             try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO gaid (rowid, groupId, artifactId) VALUES (?, ?, ?)")) {
                 for (ProtoGAId gaid : deltaRecords.gaid()) {
@@ -214,7 +217,7 @@ public class SearchContext {
                 statement.executeBatch();
             }
 
-            SearchContext.LOGGER.info("  Inserting class delta information (this may take a while)");
+            SearchContext.LOGGER.info("  Inserting class delta information");
             try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO classdelta (rowid, classId, versionId, changetype) VALUES (?, ?, ?, ?)")) {
                 for (ProtoClassDelta classDelta : deltaRecords.classdelta()) {
                     statement.setInt(1, classDelta.rowId());
@@ -238,7 +241,7 @@ public class SearchContext {
                 statement.executeBatch();
             }
 
-            SearchContext.LOGGER.info("  Inserting member delta information (this may take a while - several minutes of waiting wouldn't be unusual)");
+            SearchContext.LOGGER.info("  Inserting member delta information");
             try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO memberdelta (rowid, memberId, versionId, changetype) VALUES (?, ?, ?, ?)")) {
                 for (ProtoMemberDelta memberDelta : deltaRecords.memberdelta()) {
                     statement.setInt(1, memberDelta.rowId());
@@ -249,6 +252,8 @@ public class SearchContext {
                 }
                 statement.executeBatch();
             }
+            this.searchDatabaseConnection.commit();
+            this.searchDatabaseConnection.setAutoCommit(true);
         } catch (SQLException e) {
             this.aborted = true;
             throw new RuntimeException("Unable to insert initial delta records into database.", e);
