@@ -35,6 +35,9 @@ public class Paperpusher {
     @NotNull
     public static final String PAPERPUSHER_VERSION;
 
+    @NotNull
+    public static final String COPYRIGHT_YEARS = "2023-2025";
+
     public static final Logger LOGGER = LoggerFactory.getLogger(Paperpusher.class);
 
     public static void main(String[] args) {

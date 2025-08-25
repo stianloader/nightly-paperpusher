@@ -74,6 +74,8 @@ import xmlparser.error.InvalidXml;
 import xmlparser.model.XmlElement;
 
 import io.javalin.Javalin;
+import io.javalin.http.Handler;
+import io.javalin.http.HttpStatus;
 
 public class SearchContext {
     public static record SearchConfiguration(Path repositoryPath, String searchBindPrefix, @NotNull String repositoryId) { }
@@ -101,9 +103,24 @@ public class SearchContext {
     public void attach(Javalin server, MavenPublishContext publish) {
         this.ensureMavenIndexInitialized();
         this.ensureDeltaDBInitialized();
+
         if (this.aborted) {
             throw new IllegalStateException("Aborted execution");
         }
+
+        String prefix = this.config.searchBindPrefix;
+        if (prefix.codePointBefore(prefix.length()) == '/') {
+            prefix = prefix.substring(0, prefix.length() - 1);
+        }
+        String finalPrefix = prefix;
+        Handler methodNotAllowedHandler = (ctx) -> {
+            ctx.result("HTTP Response code 405 (METHOD NOT ALLOWED): The search endpoint should only be called using GET requests.");
+            ctx.status(HttpStatus.METHOD_NOT_ALLOWED);
+        };
+        server.put(finalPrefix + "/*", methodNotAllowedHandler);
+        server.post(finalPrefix + "/*", methodNotAllowedHandler);
+        server.get(finalPrefix + "/projects", (ctx) -> DeltaServer.listProjects(this.searchDatabaseConnection, ctx));
+
         publish.addPublicationListener(this::updateMavenIndex);
     }
 
