@@ -120,6 +120,7 @@ public class SearchContext {
         server.put(finalPrefix + "/*", methodNotAllowedHandler);
         server.post(finalPrefix + "/*", methodNotAllowedHandler);
         server.get(finalPrefix + "/projects", (ctx) -> DeltaServer.listProjects(this.searchDatabaseConnection, ctx));
+        server.get(finalPrefix + "/packages/{projectid}", (ctx) -> DeltaServer.listPackages(this.searchDatabaseConnection, ctx));
 
         publish.addPublicationListener(this::updateMavenIndex);
     }

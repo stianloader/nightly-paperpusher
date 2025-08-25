@@ -13,6 +13,13 @@ class DeltaDB {
         ADDED,
         REMOVED,
         CONTENTS_CHANGED;
+
+        private static final @NotNull ChangeType @NotNull[] INTERNAL_LOOKUP = ChangeType.values();
+
+        @NotNull
+        public static final ChangeType lookupValue(int ordinal) {
+            return ChangeType.INTERNAL_LOOKUP[ordinal];
+        }
     }
 
     record ProtoGAId(int rowId, @NotNull String groupId, @NotNull String artifactId) {}
