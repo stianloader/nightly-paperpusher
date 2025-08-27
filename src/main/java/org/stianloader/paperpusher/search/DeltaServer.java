@@ -168,6 +168,8 @@ final class DeltaServer {
                     throw new IllegalStateException("removedVersion != null");
                 }
 
+
+                htmlOut.append("</p><p>View <a href=\"../members/").append(classId).append("\">class members</a></p></li>");
                 htmlOut.append("</p></li>");
             }
 
@@ -178,6 +180,209 @@ final class DeltaServer {
         } catch (SQLException e) {
             LoggerFactory.getLogger(DeltaServer.class).error("Unable to query classes from database for gaid '{}', packageId '{}'", gaid, packageId, e);
             context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available classes for the project from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return;
+        }
+    }
+
+    static final void listMembers(@NotNull Connection dbConn, @NotNull Context context) {
+        String htmlPreamble = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+            <title>Member list</title>
+            <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+             <meta name="viewport" content="width=device-width, initial-scale=1"/>
+            </head>
+            <body>
+        """;
+
+        String classIdString = context.pathParam("classid");
+        int classId;
+
+        try {
+            classId = Integer.parseInt(classIdString);
+        } catch (NumberFormatException nfe) {
+            context.result(
+                htmlPreamble
+                + "<p>HTTP response code 404 (NOT FOUND): The provided class id is not valid. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
+                + DeltaServer.HTML_AFTERWORD
+            );
+            context.contentType(ContentType.HTML);
+            context.status(HttpStatus.NOT_FOUND);
+            return;
+        }
+
+        String className;
+        int packageId;
+
+        try (Statement statement = dbConn.createStatement();
+                ResultSet packageIdLookup = statement.executeQuery("SELECT packageId, className FROM classid WHERE rowid = " + classId)) {
+            if (!packageIdLookup.next()) {
+                context.result(
+                    htmlPreamble
+                    + "<p>HTTP response code 404 (NOT FOUND): The provided class id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
+                    + DeltaServer.HTML_AFTERWORD
+                );
+                context.contentType(ContentType.HTML);
+                context.status(HttpStatus.NOT_FOUND);
+                return;
+            }
+            packageId = packageIdLookup.getInt(1);
+            className = Objects.requireNonNull(packageIdLookup.getString(2));
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '<unknown>', packageId '<unknown>', classId '{}'", classId, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        String packageName;
+        int gaid;
+
+        try (Statement statement = dbConn.createStatement();
+                ResultSet packageIdLookup = statement.executeQuery("SELECT gaId, packageName FROM packageid WHERE rowid = " + packageId)) {
+            gaid = packageIdLookup.getInt(1);
+            packageName = packageIdLookup.getString(2);
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '<unknown>', packageId '{}', classId '{}'", packageId, classId, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        try (Statement statementA = dbConn.createStatement();
+                ResultSet gaidLookup = statementA.executeQuery("SELECT groupId, artifactId FROM gaid WHERE rowid = " + gaid);
+                Statement statementB = dbConn.createStatement();
+                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaid);
+                Statement statementC = dbConn.createStatement();
+                ResultSet members = statementC.executeQuery("SELECT rowid, memberName, memberDesc FROM memberid WHERE classId = " + classId);
+                PreparedStatement memberDeltaLookup = dbConn.prepareStatement("SELECT versionId, changetype FROM memberdelta WHERE memberId = ?")) {
+
+            if (!gaidLookup.next()) {
+                context.result(
+                    htmlPreamble
+                    + "<p>HTTP response code 404 (NOT FOUND): The provided project id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
+                    + DeltaServer.HTML_AFTERWORD
+                );
+                context.contentType(ContentType.HTML);
+                context.status(HttpStatus.NOT_FOUND);
+                return;
+            }
+
+            StringBuilder htmlOut = new StringBuilder(htmlPreamble);
+            htmlOut
+                .append("<h1>Class member listing for project ")
+                .append(gaidLookup.getString(1))
+                .append(":")
+                .append(gaidLookup.getString(2))
+                .append(" class ")
+                .append(packageName)
+                .append("/")
+                .append(className)
+                .append("</h1><p>&gt; Return to <a href=\"../classes/")
+                .append(packageId)
+                .append("\">list of classes for package</a></p><p>&gt; Return to <a href=\"../packages/")
+                .append(gaid)
+                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
+
+            Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
+
+            while (versionLookup.next()) {
+                versionTextLookup.put(versionLookup.getInt(1), MavenVersion.parse(Objects.requireNonNull(versionLookup.getString(2))));
+            }
+
+            Map<ArtifactContentClassMember, Integer> sortedMembers = new TreeMap<>();
+
+            while (members.next()) {
+                int memberId = members.getInt(1);
+                String memberName = Objects.requireNonNull(members.getString(2));
+                String memberDesc = Objects.requireNonNull(members.getString(3));
+                sortedMembers.put(new ArtifactContentClassMember(className, memberName, memberDesc), memberId);
+            }
+
+            for (Map.Entry<ArtifactContentClassMember, Integer> entry : sortedMembers.entrySet()) {
+                MavenVersion introducedVersion = null;
+                MavenVersion lastIntroduction = null;
+                MavenVersion removedVersion = null;
+                boolean discontinious = false;
+
+                Map<MavenVersion, ChangeType> entries = new TreeMap<>();
+
+                memberDeltaLookup.setInt(1, entry.getValue());
+                try (ResultSet classDeltas = memberDeltaLookup.executeQuery()) {
+                    while (classDeltas.next()) {
+                        MavenVersion version = versionTextLookup.get(classDeltas.getInt(1));
+                        if (version == null) {
+                            throw new IllegalStateException("Corrupted database: Version not registered.");
+                        }
+                        ChangeType changeType = ChangeType.lookupValue(classDeltas.getInt(2));
+                        entries.put(version, changeType);
+                        switch (changeType) {
+                        case ChangeType.ADDED:
+                            if (introducedVersion == null || version.isNewerThan(introducedVersion)) {
+                                discontinious = introducedVersion != null;
+                                introducedVersion = version;
+                            }
+                            if (lastIntroduction == null || lastIntroduction.isNewerThan(version)) {
+                                lastIntroduction = version;
+                            }
+                            break;
+                        case ChangeType.REMOVED:
+                            if (removedVersion == null || removedVersion.isNewerThan(version)) {
+                                removedVersion = version;
+                            }
+                            break;
+                        case ChangeType.CONTENTS_CHANGED:
+                            break;
+                        }
+                    }
+                }
+
+                ArtifactContentClassMember member = entry.getKey();
+                boolean isField = member.desc.charAt(0) != '(';
+
+                if (introducedVersion == null || lastIntroduction == null) {
+                    htmlOut
+                        .append("<li><p style=\"color:red\"> ")
+                        .append(isField ? "Field <b>" : "Method <b>")
+                        .append(member.name)
+                        .append(" ")
+                        .append(member.desc)
+                        .append("</b> was never available?</p></li>");
+                    continue;
+                }
+
+                boolean available = removedVersion == null || lastIntroduction.isNewerThan(removedVersion);
+
+                htmlOut
+                    .append(available ? "<li><p> " : "<li><p><span style=\"color:red\"> ")
+                    .append(isField ? "Field <b>" : "Method <b>")
+                    .append(member.name)
+                    .append(" ")
+                    .append(member.desc)
+                    .append(available ? "</b><span style=\"color:green\"> Introduced in " : "</b></span><span style=\"color:gray\"> Introduced in ")
+                    .append(lastIntroduction.getOriginText())
+                    .append("</span>");
+
+                if (!available) {
+                    htmlOut.append("<span style=\"color:red\"> Removed in ").append(Objects.requireNonNull(removedVersion).getOriginText()).append("</span>");
+                } else if (discontinious) {
+                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion).append("</span>");
+                } else if (removedVersion != null) {
+                    throw new IllegalStateException("removedVersion != null");
+                }
+
+                htmlOut.append("</p></li>");
+            }
+
+            htmlOut.append("</ul>").append(DeltaServer.HTML_AFTERWORD);
+            context.result(htmlOut + "");
+            context.contentType(ContentType.HTML);
+            context.status(HttpStatus.OK);
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '{}', packageId '{}', classId '{}'", gaid, packageId, classId, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
             context.status(HttpStatus.INTERNAL_SERVER_ERROR);
             return;
         }
