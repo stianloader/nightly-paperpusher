@@ -97,10 +97,22 @@ final class DeltaServer {
                 return;
             }
 
+            String groupId = gaidLookup.getString(1);
+            String artifactId = gaidLookup.getString(2);
+
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
-            htmlOut.append("<h1>Class listing for project ").append(gaidLookup.getString(1)).append(":").append(gaidLookup.getString(2)).append(" package ").append(packageName).append("</h1>");
-            htmlOut.append("<p>&gt; Return to <a href=\"../packages/").append(gaid).append("\">list of packages for project</a></p>");
-            htmlOut.append("<p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
+            htmlOut
+                .append("<h1>Class listing for project ")
+                .append(groupId)
+                .append(":")
+                .append(artifactId)
+                .append(" package ")
+                .append(packageName)
+                .append("</h1><p>&gt; Return to <a href=\"../packages/")
+                .append(groupId)
+                .append("/")
+                .append(artifactId)
+                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
 
@@ -270,12 +282,15 @@ final class DeltaServer {
                 return;
             }
 
+            String groupId = gaidLookup.getString(1);
+            String artifactId = gaidLookup.getString(2);
+
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
             htmlOut
                 .append("<h1>Class member listing for project ")
-                .append(gaidLookup.getString(1))
+                .append(groupId)
                 .append(":")
-                .append(gaidLookup.getString(2))
+                .append(artifactId)
                 .append(" class ")
                 .append(packageName)
                 .append("/")
@@ -283,7 +298,9 @@ final class DeltaServer {
                 .append("</h1><p>&gt; Return to <a href=\"../classes/")
                 .append(packageId)
                 .append("\">list of classes for package</a></p><p>&gt; Return to <a href=\"../packages/")
-                .append(gaid)
+                .append(groupId)
+                .append("/")
+                .append(artifactId)
                 .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
@@ -400,44 +417,43 @@ final class DeltaServer {
             <body>
         """;
 
-        String projectIdString = context.pathParam("projectid");
+        String groupIdString = context.pathParam("groupid");
+        String artifactIdString = context.pathParam("artifactid");
         int gaid;
 
-        try {
-            gaid = Integer.parseInt(projectIdString);
-        } catch (NumberFormatException nfe) {
-            context.result(
-                htmlPreamble
-                + "<p>HTTP response code 404 (NOT FOUND): The provided project id is not valid. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                + DeltaServer.HTML_AFTERWORD
-            );
-            context.contentType(ContentType.HTML);
-            context.status(HttpStatus.NOT_FOUND);
+        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM gaid WHERE groupid = ? AND artifactid = ?")) {
+            statement.setString(1, groupIdString);
+            statement.setString(2, artifactIdString);
+
+            try (ResultSet gaidLookup = statement.executeQuery()) {
+                if (!gaidLookup.next()) {
+                    context.result(
+                        htmlPreamble
+                        + "<p>HTTP response code 404 (NOT FOUND): The provided project does not seem to exist on this server. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
+                        + DeltaServer.HTML_AFTERWORD
+                    );
+                    context.contentType(ContentType.HTML);
+                    context.status(HttpStatus.NOT_FOUND);
+                    return;
+                }
+                gaid = gaidLookup.getInt(1);
+            }
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for GA '{}':'{}'", groupIdString, artifactIdString, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available packages for the project from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
             return;
         }
 
-        try (Statement statementA = dbConn.createStatement();
-                ResultSet gaidLookup = statementA.executeQuery("SELECT groupId, artifactId FROM gaid WHERE rowid = " + gaid);
-                Statement statementB = dbConn.createStatement();
+        try (Statement statementB = dbConn.createStatement();
                 ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaid);
                 Statement statementC = dbConn.createStatement();
                 ResultSet packages = statementC.executeQuery("SELECT rowid, packageName FROM packageid WHERE gaid = " + gaid + " ORDER BY packageName");
                 PreparedStatement packageDeltaLookup = dbConn.prepareStatement("SELECT versionId, changetype FROM packagedelta WHERE packageid = ?")) {
 
-            if (!gaidLookup.next()) {
-                context.result(
-                    htmlPreamble
-                    + "<p>HTTP response code 404 (NOT FOUND): The provided project id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                    + DeltaServer.HTML_AFTERWORD
-                );
-                context.contentType(ContentType.HTML);
-                context.status(HttpStatus.NOT_FOUND);
-                return;
-            }
-
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
-            htmlOut.append("<h1>Package listing for project ").append(gaidLookup.getString(1)).append(":").append(gaidLookup.getString(2)).append("</h1>");
-            htmlOut.append("<p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
+            htmlOut.append("<h1>Package listing for project ").append(groupIdString).append(":").append(artifactIdString).append("</h1>");
+            htmlOut.append("<p>&gt; Return to <a href=\"../../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
 
@@ -505,7 +521,7 @@ final class DeltaServer {
                     throw new IllegalStateException("removedVersion != null");
                 }
 
-                htmlOut.append("</p><p>View <a href=\"../classes/").append(packageId).append("\">classes</a></p></li>");
+                htmlOut.append("</p><p>View <a href=\"../../classes/").append(packageId).append("\">classes</a></p></li>");
             }
 
             htmlOut.append("</ul>").append(DeltaServer.HTML_AFTERWORD);
@@ -562,7 +578,7 @@ final class DeltaServer {
                     }
 
                     htmlOut.append("<li><p>").append(artifactId).append("&emsp;<span style=\"color:grey\">").append(versionCount).append(" versions published</span></p>");
-                    htmlOut.append("<p>View <a href=\"./packages/").append(gaId).append("\">packages</a></p></li>");
+                    htmlOut.append("<p>View <a href=\"./packages/").append(groupId).append("/").append(artifactId).append("\">packages</a></p></li>");
                 }
 
                 if (!firstGroup) {
