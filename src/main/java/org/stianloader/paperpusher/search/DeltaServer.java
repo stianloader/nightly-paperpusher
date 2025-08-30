@@ -11,9 +11,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 import org.stianloader.paperpusher.Paperpusher;
 import org.stianloader.paperpusher.search.DeltaDB.ChangeType;
+import org.stianloader.paperpusher.search.DeltaDB.ProtoClassId;
+import org.stianloader.paperpusher.search.DeltaDB.ProtoGAId;
+import org.stianloader.paperpusher.search.DeltaDB.ProtoPackageId;
 import org.stianloader.picoresolve.version.MavenVersion;
 
 import io.javalin.http.ContentType;
@@ -38,81 +42,34 @@ final class DeltaServer {
             <body>
         """;
 
-        String packageIdString = context.pathParam("packageid");
-        int packageId;
-
-        try {
-            packageId = Integer.parseInt(packageIdString);
-        } catch (NumberFormatException nfe) {
-            context.result(
-                htmlPreamble
-                + "<p>HTTP response code 404 (NOT FOUND): The provided package id is not valid. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                + DeltaServer.HTML_AFTERWORD
-            );
-            context.contentType(ContentType.HTML);
-            context.status(HttpStatus.NOT_FOUND);
+        ProtoGAId gaidRow = DeltaServer.lookupGAIdRow(dbConn, context, htmlPreamble, "../../..");
+        if (gaidRow == null) {
+            return;
+        }
+        ProtoPackageId packageRow = DeltaServer.lookupPackageIdRow(dbConn, context, htmlPreamble, "../../..", gaidRow);
+        if (packageRow == null) {
             return;
         }
 
-        String packageName;
-        int gaid;
-
-        try (Statement statement = dbConn.createStatement();
-                ResultSet packageIdLookup = statement.executeQuery("SELECT gaId, packageName FROM packageid WHERE rowid = " + packageId)) {
-            if (!packageIdLookup.next()) {
-                context.result(
-                    htmlPreamble
-                    + "<p>HTTP response code 404 (NOT FOUND): The provided package id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                    + DeltaServer.HTML_AFTERWORD
-                );
-                context.contentType(ContentType.HTML);
-                context.status(HttpStatus.NOT_FOUND);
-                return;
-            }
-            gaid = packageIdLookup.getInt(1);
-            packageName = packageIdLookup.getString(2);
-        } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query classes from database for gaid '<unknown>', packageId '{}'", packageId, e);
-            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available classes for the project from the underlying database. Please report this bug.");
-            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
-            return;
-        }
-
-        try (Statement statementA = dbConn.createStatement();
-                ResultSet gaidLookup = statementA.executeQuery("SELECT groupId, artifactId FROM gaid WHERE rowid = " + gaid);
-                Statement statementB = dbConn.createStatement();
-                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaid);
+        try (Statement statementB = dbConn.createStatement();
+                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaidRow.rowId());
                 Statement statementC = dbConn.createStatement();
-                ResultSet classes = statementC.executeQuery("SELECT rowid, className FROM classid WHERE packageId = " + packageId + " ORDER BY className");
+                ResultSet classes = statementC.executeQuery("SELECT rowid, className FROM classid WHERE packageId = " + packageRow.rowId() + " ORDER BY className");
                 PreparedStatement classDeltaLookup = dbConn.prepareStatement("SELECT versionId, changetype FROM classdelta WHERE classId = ?")) {
-
-            if (!gaidLookup.next()) {
-                context.result(
-                    htmlPreamble
-                    + "<p>HTTP response code 404 (NOT FOUND): The provided project id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                    + DeltaServer.HTML_AFTERWORD
-                );
-                context.contentType(ContentType.HTML);
-                context.status(HttpStatus.NOT_FOUND);
-                return;
-            }
-
-            String groupId = gaidLookup.getString(1);
-            String artifactId = gaidLookup.getString(2);
 
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
             htmlOut
                 .append("<h1>Class listing for project ")
-                .append(groupId)
+                .append(gaidRow.groupId())
                 .append(":")
-                .append(artifactId)
+                .append(gaidRow.artifactId())
                 .append(" package ")
-                .append(packageName)
-                .append("</h1><p>&gt; Return to <a href=\"../packages/")
-                .append(groupId)
+                .append(packageRow.packageName())
+                .append("</h1><p>&gt; Return to <a href=\"../../../packages/")
+                .append(gaidRow.groupId())
                 .append("/")
-                .append(artifactId)
-                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
+                .append(gaidRow.artifactId())
+                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../../../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
 
@@ -180,9 +137,16 @@ final class DeltaServer {
                     throw new IllegalStateException("removedVersion != null");
                 }
 
-
-                htmlOut.append("</p><p>View <a href=\"../members/").append(classId).append("\">class members</a></p></li>");
-                htmlOut.append("</p></li>");
+                htmlOut
+                    .append("</p><p>View <a href=\"../../../members/")
+                    .append(gaidRow.groupId())
+                    .append("/")
+                    .append(gaidRow.artifactId())
+                    .append("/")
+                    .append(packageRow.packageName().replace('/', '.'))
+                    .append("/")
+                    .append(className)
+                    .append("\">class members</a></p></li>");
             }
 
             htmlOut.append("</ul>").append(DeltaServer.HTML_AFTERWORD);
@@ -190,7 +154,7 @@ final class DeltaServer {
             context.contentType(ContentType.HTML);
             context.status(HttpStatus.OK);
         } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query classes from database for gaid '{}', packageId '{}'", gaid, packageId, e);
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query classes from database for gaid '{}', packageId '{}'", gaidRow, packageRow, e);
             context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available classes for the project from the underlying database. Please report this bug.");
             context.status(HttpStatus.INTERNAL_SERVER_ERROR);
             return;
@@ -209,99 +173,46 @@ final class DeltaServer {
             <body>
         """;
 
-        String classIdString = context.pathParam("classid");
-        int classId;
-
-        try {
-            classId = Integer.parseInt(classIdString);
-        } catch (NumberFormatException nfe) {
-            context.result(
-                htmlPreamble
-                + "<p>HTTP response code 404 (NOT FOUND): The provided class id is not valid. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                + DeltaServer.HTML_AFTERWORD
-            );
-            context.contentType(ContentType.HTML);
-            context.status(HttpStatus.NOT_FOUND);
+        ProtoGAId gaidRow = DeltaServer.lookupGAIdRow(dbConn, context, htmlPreamble, "../../../..");
+        if (gaidRow == null) {
+            return;
+        }
+        ProtoPackageId packageRow = DeltaServer.lookupPackageIdRow(dbConn, context, htmlPreamble, "../../../..", gaidRow);
+        if (packageRow == null) {
+            return;
+        }
+        ProtoClassId classRow = DeltaServer.lookupClassIdRow(dbConn, context, htmlPreamble, "../../../..", gaidRow, packageRow);
+        if (classRow == null) {
             return;
         }
 
-        String className;
-        int packageId;
-
-        try (Statement statement = dbConn.createStatement();
-                ResultSet packageIdLookup = statement.executeQuery("SELECT packageId, className FROM classid WHERE rowid = " + classId)) {
-            if (!packageIdLookup.next()) {
-                context.result(
-                    htmlPreamble
-                    + "<p>HTTP response code 404 (NOT FOUND): The provided class id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                    + DeltaServer.HTML_AFTERWORD
-                );
-                context.contentType(ContentType.HTML);
-                context.status(HttpStatus.NOT_FOUND);
-                return;
-            }
-            packageId = packageIdLookup.getInt(1);
-            className = Objects.requireNonNull(packageIdLookup.getString(2));
-        } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '<unknown>', packageId '<unknown>', classId '{}'", classId, e);
-            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
-            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
-            return;
-        }
-
-        String packageName;
-        int gaid;
-
-        try (Statement statement = dbConn.createStatement();
-                ResultSet packageIdLookup = statement.executeQuery("SELECT gaId, packageName FROM packageid WHERE rowid = " + packageId)) {
-            gaid = packageIdLookup.getInt(1);
-            packageName = packageIdLookup.getString(2);
-        } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '<unknown>', packageId '{}', classId '{}'", packageId, classId, e);
-            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
-            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
-            return;
-        }
-
-        try (Statement statementA = dbConn.createStatement();
-                ResultSet gaidLookup = statementA.executeQuery("SELECT groupId, artifactId FROM gaid WHERE rowid = " + gaid);
-                Statement statementB = dbConn.createStatement();
-                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaid);
+        try (Statement statementB = dbConn.createStatement();
+                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaidRow.rowId());
                 Statement statementC = dbConn.createStatement();
-                ResultSet members = statementC.executeQuery("SELECT rowid, memberName, memberDesc FROM memberid WHERE classId = " + classId);
+                ResultSet members = statementC.executeQuery("SELECT rowid, memberName, memberDesc FROM memberid WHERE classId = " + classRow.rowId());
                 PreparedStatement memberDeltaLookup = dbConn.prepareStatement("SELECT versionId, changetype FROM memberdelta WHERE memberId = ?")) {
-
-            if (!gaidLookup.next()) {
-                context.result(
-                    htmlPreamble
-                    + "<p>HTTP response code 404 (NOT FOUND): The provided project id does not exist. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                    + DeltaServer.HTML_AFTERWORD
-                );
-                context.contentType(ContentType.HTML);
-                context.status(HttpStatus.NOT_FOUND);
-                return;
-            }
-
-            String groupId = gaidLookup.getString(1);
-            String artifactId = gaidLookup.getString(2);
 
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
             htmlOut
                 .append("<h1>Class member listing for project ")
-                .append(groupId)
+                .append(gaidRow.groupId())
                 .append(":")
-                .append(artifactId)
+                .append(gaidRow.artifactId())
                 .append(" class ")
-                .append(packageName)
+                .append(packageRow.packageName())
                 .append("/")
-                .append(className)
-                .append("</h1><p>&gt; Return to <a href=\"../classes/")
-                .append(packageId)
-                .append("\">list of classes for package</a></p><p>&gt; Return to <a href=\"../packages/")
-                .append(groupId)
+                .append(classRow.className())
+                .append("</h1><p>&gt; Return to <a href=\"../../../../classes/")
+                .append(gaidRow.groupId())
                 .append("/")
-                .append(artifactId)
-                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../projects\">list of projects</a></p><ul>");
+                .append(gaidRow.artifactId())
+                .append("/")
+                .append(packageRow.packageName().replace('/', '.'))
+                .append("\">list of classes for package</a></p><p>&gt; Return to <a href=\"../../../../packages/")
+                .append(gaidRow.groupId())
+                .append("/")
+                .append(gaidRow.artifactId())
+                .append("\">list of packages for project</a></p><p>&gt; Return to <a href=\"../../../../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
 
@@ -315,7 +226,7 @@ final class DeltaServer {
                 int memberId = members.getInt(1);
                 String memberName = Objects.requireNonNull(members.getString(2));
                 String memberDesc = Objects.requireNonNull(members.getString(3));
-                sortedMembers.put(new ArtifactContentClassMember(className, memberName, memberDesc), memberId);
+                sortedMembers.put(new ArtifactContentClassMember(classRow.className(), memberName, memberDesc), memberId);
             }
 
             for (Map.Entry<ArtifactContentClassMember, Integer> entry : sortedMembers.entrySet()) {
@@ -398,7 +309,7 @@ final class DeltaServer {
             context.contentType(ContentType.HTML);
             context.status(HttpStatus.OK);
         } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '{}', packageId '{}', classId '{}'", gaid, packageId, classId, e);
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query class members from database for gaid '{}', packageId '{}', classId '{}'", gaidRow, packageRow, classRow, e);
             context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available class members for the package from the underlying database. Please report this bug.");
             context.status(HttpStatus.INTERNAL_SERVER_ERROR);
             return;
@@ -417,42 +328,19 @@ final class DeltaServer {
             <body>
         """;
 
-        String groupIdString = context.pathParam("groupid");
-        String artifactIdString = context.pathParam("artifactid");
-        int gaid;
-
-        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM gaid WHERE groupid = ? AND artifactid = ?")) {
-            statement.setString(1, groupIdString);
-            statement.setString(2, artifactIdString);
-
-            try (ResultSet gaidLookup = statement.executeQuery()) {
-                if (!gaidLookup.next()) {
-                    context.result(
-                        htmlPreamble
-                        + "<p>HTTP response code 404 (NOT FOUND): The provided project does not seem to exist on this server. For a list of all available projects, click <a href=\"../projects\">this link.</a></p>"
-                        + DeltaServer.HTML_AFTERWORD
-                    );
-                    context.contentType(ContentType.HTML);
-                    context.status(HttpStatus.NOT_FOUND);
-                    return;
-                }
-                gaid = gaidLookup.getInt(1);
-            }
-        } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for GA '{}':'{}'", groupIdString, artifactIdString, e);
-            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available packages for the project from the underlying database. Please report this bug.");
-            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+        ProtoGAId gaidRow = DeltaServer.lookupGAIdRow(dbConn, context, htmlPreamble, "../..");
+        if (gaidRow == null) {
             return;
         }
 
         try (Statement statementB = dbConn.createStatement();
-                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaid);
+                ResultSet versionLookup = statementB.executeQuery("SELECT rowid, version FROM gavid where gaid = " + gaidRow.rowId());
                 Statement statementC = dbConn.createStatement();
-                ResultSet packages = statementC.executeQuery("SELECT rowid, packageName FROM packageid WHERE gaid = " + gaid + " ORDER BY packageName");
+                ResultSet packages = statementC.executeQuery("SELECT rowid, packageName FROM packageid WHERE gaid = " + gaidRow.rowId() + " ORDER BY packageName");
                 PreparedStatement packageDeltaLookup = dbConn.prepareStatement("SELECT versionId, changetype FROM packagedelta WHERE packageid = ?")) {
 
             StringBuilder htmlOut = new StringBuilder(htmlPreamble);
-            htmlOut.append("<h1>Package listing for project ").append(groupIdString).append(":").append(artifactIdString).append("</h1>");
+            htmlOut.append("<h1>Package listing for project ").append(gaidRow.groupId()).append(":").append(gaidRow.artifactId()).append("</h1>");
             htmlOut.append("<p>&gt; Return to <a href=\"../../projects\">list of projects</a></p><ul>");
 
             Map<Integer, MavenVersion> versionTextLookup = new HashMap<>();
@@ -521,7 +409,14 @@ final class DeltaServer {
                     throw new IllegalStateException("removedVersion != null");
                 }
 
-                htmlOut.append("</p><p>View <a href=\"../../classes/").append(packageId).append("\">classes</a></p></li>");
+                htmlOut
+                    .append("</p><p>View <a href=\"../../classes/")
+                    .append(gaidRow.groupId())
+                    .append("/")
+                    .append(gaidRow.artifactId())
+                    .append("/")
+                    .append(packageName.replace('/', '.'))
+                    .append("\">classes</a></p></li>");
             }
 
             htmlOut.append("</ul>").append(DeltaServer.HTML_AFTERWORD);
@@ -529,7 +424,7 @@ final class DeltaServer {
             context.contentType(ContentType.HTML);
             context.status(HttpStatus.OK);
         } catch (SQLException e) {
-            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for gaid '{}'", gaid, e);
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for gaid '{}'", gaidRow, e);
             context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available packages for the project from the underlying database. Please report this bug.");
             context.status(HttpStatus.INTERNAL_SERVER_ERROR);
             return;
@@ -597,5 +492,93 @@ final class DeltaServer {
         context.result(htmlOut + "");
         context.contentType(ContentType.HTML);
         context.status(HttpStatus.OK);
+    }
+
+    @Nullable
+    private static ProtoClassId lookupClassIdRow(@NotNull Connection dbConn, @NotNull Context context, @NotNull String htmlPreamble, @NotNull String pathToRoot, @NotNull ProtoGAId gaid, @NotNull ProtoPackageId packageId) {
+        String className = context.pathParam("class");
+
+        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM classid WHERE packageId = ? AND className = ?")) {
+            statement.setInt(1, packageId.rowId());
+            statement.setString(2, className);
+
+            try (ResultSet classLookup = statement.executeQuery()) {
+                if (!classLookup.next()) {
+                    context.result(
+                        htmlPreamble
+                        + "<p>HTTP response code 404 (NOT FOUND): The provided class does not seem to exist on this server. For a list of all available classes for the given package, click <a href=\"" + pathToRoot + "/classes/" + gaid.groupId() + "/" + gaid.artifactId() + "/" + packageId.packageName().replace('/', '.') + "\">this link.</a></p>"
+                        + DeltaServer.HTML_AFTERWORD
+                    );
+                    context.contentType(ContentType.HTML);
+                    context.status(HttpStatus.NOT_FOUND);
+                    return null;
+                }
+                return new ProtoClassId(classLookup.getInt(1), packageId.rowId(), className);
+            }
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query classes from database for GAid '{}', packageId '{}', class '{}'", gaid, packageId, className, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available classes for the package from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return null;
+        }
+    }
+
+    @Nullable
+    private static ProtoGAId lookupGAIdRow(@NotNull Connection dbConn, @NotNull Context context, @NotNull String htmlPreamble, @NotNull String pathToRoot) {
+        String groupIdString = context.pathParam("groupid");
+        String artifactIdString = context.pathParam("artifactid");
+
+        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM gaid WHERE groupid = ? AND artifactid = ?")) {
+            statement.setString(1, groupIdString);
+            statement.setString(2, artifactIdString);
+
+            try (ResultSet gaidLookup = statement.executeQuery()) {
+                if (!gaidLookup.next()) {
+                    context.result(
+                        htmlPreamble
+                        + "<p>HTTP response code 404 (NOT FOUND): The provided project does not seem to exist on this server. For a list of all available projects, click <a href=\"" + pathToRoot + "/projects\">this link.</a></p>"
+                        + DeltaServer.HTML_AFTERWORD
+                    );
+                    context.contentType(ContentType.HTML);
+                    context.status(HttpStatus.NOT_FOUND);
+                    return null;
+                }
+                return new ProtoGAId(gaidLookup.getInt(1), groupIdString, artifactIdString);
+            }
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for GA '{}':'{}'", groupIdString, artifactIdString, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available packages for the project from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return null;
+        }
+    }
+
+    @Nullable
+    private static ProtoPackageId lookupPackageIdRow(@NotNull Connection dbConn, @NotNull Context context, @NotNull String htmlPreamble, @NotNull String pathToRoot, @NotNull ProtoGAId gaid) {
+        String packageName = context.pathParam("package").replace('.', '/');
+
+        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM packageid WHERE gaId = ? AND packageName = ?")) {
+            statement.setInt(1, gaid.rowId());
+            statement.setString(2, packageName);
+
+            try (ResultSet packageLookup = statement.executeQuery()) {
+                if (!packageLookup.next()) {
+                    context.result(
+                        htmlPreamble
+                        + "<p>HTTP response code 404 (NOT FOUND): The provided package does not seem to exist on this server. For a list of all available packages for the given project, click <a href=\"" + pathToRoot + "/packages/" + gaid.groupId() + "/" + gaid.artifactId() + "\">this link.</a></p>"
+                        + DeltaServer.HTML_AFTERWORD
+                    );
+                    context.contentType(ContentType.HTML);
+                    context.status(HttpStatus.NOT_FOUND);
+                    return null;
+                }
+                return new ProtoPackageId(packageLookup.getInt(1), gaid.rowId(), packageName);
+            }
+        } catch (SQLException e) {
+            LoggerFactory.getLogger(DeltaServer.class).error("Unable to query packages from database for Package '{}' from GA '{}'", packageName, gaid, e);
+            context.result("HTTP Response code 500 (INTERNAL SERVER ERROR): The server was unable to obtain the available classes for the package from the underlying database. Please report this bug.");
+            context.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            return null;
+        }
     }
 }

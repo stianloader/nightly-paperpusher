@@ -121,8 +121,8 @@ public class SearchContext {
         server.post(finalPrefix + "/*", methodNotAllowedHandler);
         server.get(finalPrefix + "/projects", (ctx) -> DeltaServer.listProjects(this.searchDatabaseConnection, ctx));
         server.get(finalPrefix + "/packages/{groupid}/{artifactid}", (ctx) -> DeltaServer.listPackages(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/classes/{packageid}", (ctx) -> DeltaServer.listClasses(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/members/{classid}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
+        server.get(finalPrefix + "/classes/{groupid}/{artifactid}/{package}", (ctx) -> DeltaServer.listClasses(this.searchDatabaseConnection, ctx));
+        server.get(finalPrefix + "/members/{groupid}/{artifactid}/{package}/{class}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
 
         publish.addPublicationListener(this::updateMavenIndex);
     }
