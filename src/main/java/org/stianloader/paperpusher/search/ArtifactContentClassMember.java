@@ -2,6 +2,7 @@ package org.stianloader.paperpusher.search;
 
 import java.util.Objects;
 
+import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 
 import software.coley.cafedude.classfile.ClassMember;
@@ -48,6 +49,34 @@ public class ArtifactContentClassMember implements Comparable<ArtifactContentCla
         }
         ArtifactContentClassMember other = (ArtifactContentClassMember) obj;
         return this.owner.equals(other.owner) && this.name.equals(other.name) && this.desc.equals(other.desc);
+    }
+
+    @NotNull
+    public String getDesc() {
+        return this.desc;
+    }
+
+    @NotNull
+    public String getName() {
+        return this.name;
+    }
+
+    @NotNull
+    @Contract(pure = true)
+    public String getOwnerFQN() {
+        return this.owner;
+    }
+
+    @NotNull
+    @Contract(pure = true)
+    public final String getOwnerPackageName() {
+        return DeltaDB.getPackageName(this.getOwnerFQN());
+    }
+
+    @NotNull
+    @Contract(pure = true)
+    public final String getOwnerShortName() {
+        return DeltaDB.getClassShortName(this.getOwnerFQN());
     }
 
     @Override

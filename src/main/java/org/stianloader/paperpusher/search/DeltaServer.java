@@ -557,7 +557,7 @@ final class DeltaServer {
     private static ProtoPackageId lookupPackageIdRow(@NotNull Connection dbConn, @NotNull Context context, @NotNull String htmlPreamble, @NotNull String pathToRoot, @NotNull ProtoGAId gaid) {
         String packageName = context.pathParam("package").replace('.', '/');
 
-        try (PreparedStatement statement = dbConn.prepareStatement("SELECT rowid FROM packageid WHERE gaId = ? AND packageName = ?")) {
+        try (PreparedStatement statement = dbConn.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_PACKAGEID)) {
             statement.setInt(1, gaid.rowId());
             statement.setString(2, packageName);
 

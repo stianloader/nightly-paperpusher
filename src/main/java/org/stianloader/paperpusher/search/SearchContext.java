@@ -22,6 +22,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,6 +39,7 @@ import org.apache.maven.index.reader.Record.EntryKey;
 import org.apache.maven.index.reader.Record.Type;
 import org.apache.maven.index.reader.RecordCompactor;
 import org.apache.maven.index.reader.resource.PathWritableResourceHandler;
+import org.jetbrains.annotations.CheckReturnValue;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -78,15 +80,108 @@ import io.javalin.http.Handler;
 import io.javalin.http.HttpStatus;
 
 public class SearchContext {
-    public static record SearchConfiguration(Path repositoryPath, String searchBindPrefix, @NotNull String repositoryId) { }
+    public static record SearchConfiguration(@NotNull Path repositoryPath, String searchBindPrefix, @NotNull String repositoryId) { }
 
+    private static final @NotNull String @NotNull[] GENERATED_ROWID_COLUMNS = new @NotNull String[] { "rowid" };
     private static final Logger LOGGER = LoggerFactory.getLogger(SearchContext.class);
+
+    @CheckReturnValue
+    private static int executeLookupUID(@NotNull PreparedStatement statement, boolean requireFind, @NotNull String debugType, @Nullable Object debugElement) throws SQLException {
+        try (ResultSet lookupResult = statement.executeQuery()) {
+            if (lookupResult.next()) {
+                int uid = lookupResult.getInt(1);
+                if (lookupResult.next()) {
+                    SearchContext.LOGGER.warn("Duplicate {} '{}' detected in database. DB corrupted? Ignoring.", debugType, debugElement);
+                }
+                return uid;
+            } else if (!requireFind) {
+                return -1;
+            } else {
+                throw new SQLException(debugType + " '" + debugElement + "' not found in DB. Is the DB corrupted?");
+            }
+        }
+    }
+
+    private static int executeSingleUpdateGetROWID(@NotNull PreparedStatement statement, @NotNull String debugType, @Nullable Object debugData) throws SQLException {
+        if (statement.executeUpdate() <= 0) {
+            throw new SQLException("Update failed whilst allocating " + debugType + " for '" + debugData + "'.");
+        }
+
+        try (ResultSet generatedKeys = statement.getGeneratedKeys()) {
+            if (!generatedKeys.next()) {
+                throw new SQLException("No rows in #getGeneratedKeys result after allocating " + debugType + " for '" + debugData + "'.");
+            }
+            int rowid = generatedKeys.getInt(1);
+            if (generatedKeys.next()) {
+                SearchContext.LOGGER.warn("More than one row in #getGeneratedKeys result after allocating {} for '{}'. Ignoring further entries.", debugType, debugData);
+            }
+            return rowid;
+        }
+    }
+
+    @NotNull
+    @CheckReturnValue
+    private static ArtifactContentIndex generateArtifactContentIndex(@NotNull Path artifactPath, @NotNull ClassFileReader classReader) throws IOException {
+        try (ZipArchive archive = ZipIO.readJvm(artifactPath)) {
+            return SearchContext.generateArtifactContentIndex(artifactPath.toAbsolutePath().toString(), Objects.requireNonNull(archive, "ZipIO#readJvm(Path) yielded null"), classReader);
+        }
+    }
+
+    @NotNull
+    @CheckReturnValue
+    private static ArtifactContentIndex generateArtifactContentIndex(@NotNull String artifactSource, byte @NotNull[] artifactData, @NotNull ClassFileReader classReader) throws IOException {
+        try (ZipArchive archive = ZipIO.readJvm(artifactData)) {
+            return SearchContext.generateArtifactContentIndex(artifactSource, Objects.requireNonNull(archive, "ZipIO#readJvm(byte[]) yielded null"), classReader);
+        }
+    }
+
+    @NotNull
+    @CheckReturnValue
+    private static ArtifactContentIndex generateArtifactContentIndex(@NotNull String artifactSource, @NotNull ZipArchive archive, @NotNull ClassFileReader classReader) {
+        NavigableSet<@NotNull ArtifactContentClass> classes = new TreeSet<>();
+        Set<@NotNull String> packageNames = new LinkedHashSet<>();
+        NavigableSet<@NotNull ArtifactContentClassMember> classMembers = new TreeSet<>();
+
+        for (LocalFileHeader header : archive.getLocalFiles()) {
+            if (!header.getFileNameAsString().endsWith(".class")
+                    || header.getFileNameAsString().contains("META-INF/")) { // ignore multi-release-jar classes
+                continue;
+            }
+
+            try {
+                ClassFile classfile = classReader.read(header.decompress(LLJZipUtils.getDecompressor(header)).toArray(ValueLayout.JAVA_BYTE));
+
+                String name = Objects.requireNonNull(classfile.getName());
+                classes.add(new ArtifactContentClass(name));
+                packageNames.add(DeltaDB.getPackageName(name));
+
+                for (Field field : classfile.getFields()) {
+                    classMembers.add(new ArtifactContentClassMember(name, Objects.requireNonNull(field)));
+                }
+
+                for (Method method : classfile.getMethods()) {
+                    classMembers.add(new ArtifactContentClassMember(name, Objects.requireNonNull(method)));
+                }
+            } catch (InvalidClassException | IOException e) {
+                SearchContext.LOGGER.warn("Unable to read class '{}' in file '{}'. Skipping class...", header.getFileNameAsString(), artifactSource, e);
+                continue;
+            }
+        }
+
+        NavigableSet<@NotNull ArtifactContentPackage> packages = new TreeSet<>();
+        for (String packageName : packageNames) {
+            packages.add(new ArtifactContentPackage(packageName));
+        }
+
+        return new ArtifactContentIndex(classMembers, classes, packages, false);
+    }
 
     private boolean aborted = false;
     @NotNull
     private final SearchConfiguration config;
     @NotNull
     private final Path mavenIndexDir;
+
     @NotNull
     private final Connection searchDatabaseConnection;
 
@@ -125,9 +220,10 @@ public class SearchContext {
         server.get(finalPrefix + "/members/{groupid}/{artifactid}/{package}/{class}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
 
         publish.addPublicationListener(this::updateMavenIndex);
+        publish.addPublicationListener(this::updateDeltaDB);
     }
 
-    private void ensureDeltaDBInitialized() {
+    private synchronized void ensureDeltaDBInitialized() {
         if (this.aborted) {
             return;
         }
@@ -182,7 +278,7 @@ public class SearchContext {
             // as it very frequently creates and deletes DB journals. Hence: Gone with that feature!
             this.searchDatabaseConnection.setAutoCommit(false);
             SearchContext.LOGGER.info("  Inserting project data");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO gaid (rowid, groupId, artifactId) VALUES (?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_GAID)) {
                 for (ProtoGAId gaid : deltaRecords.gaid()) {
                     statement.setInt(1, gaid.rowId());
                     statement.setString(2, gaid.groupId());
@@ -193,7 +289,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting version data");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO gavid (rowid, gaId, version) VALUES (?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_GAVID)) {
                 for (ProtoGAVId gavid : deltaRecords.gavid()) {
                     statement.setInt(1, gavid.rowId());
                     statement.setInt(2, gavid.gaId());
@@ -204,7 +300,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting package information");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO packageid (rowid, gaId, packageName) VALUES (?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_PACKAGEID)) {
                 for (ProtoPackageId packageId : deltaRecords.packageid()) {
                     statement.setInt(1, packageId.rowId());
                     statement.setInt(2, packageId.gaId());
@@ -215,7 +311,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting package delta information");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO packagedelta (rowid, packageId, versionId, changetype) VALUES (?, ?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_PACKAGEDELTA)) {
                 for (ProtoPackageDelta packageDelta : deltaRecords.packagedelta()) {
                     statement.setInt(1, packageDelta.rowId());
                     statement.setInt(2, packageDelta.packageId());
@@ -227,7 +323,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting class data");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO classid (rowid, packageId, className) VALUES (?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_CLASSID)) {
                 for (ProtoClassId classId : deltaRecords.classid()) {
                     statement.setInt(1, classId.rowId());
                     statement.setInt(2, classId.packageId());
@@ -238,7 +334,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting class delta information");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO classdelta (rowid, classId, versionId, changetype) VALUES (?, ?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_CLASSDELTA)) {
                 for (ProtoClassDelta classDelta : deltaRecords.classdelta()) {
                     statement.setInt(1, classDelta.rowId());
                     statement.setInt(2, classDelta.classId());
@@ -250,7 +346,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting member data");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO memberid (rowid, classId, memberName, memberDesc) VALUES (?, ?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_MEMBERID)) {
                 for (ProtoMemberId memberId : deltaRecords.memberid()) {
                     statement.setInt(1, memberId.rowId());
                     statement.setInt(2, memberId.classId());
@@ -262,7 +358,7 @@ public class SearchContext {
             }
 
             SearchContext.LOGGER.info("  Inserting member delta information");
-            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("INSERT OR FAIL INTO memberdelta (rowid, memberId, versionId, changetype) VALUES (?, ?, ?, ?)")) {
+            try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_MEMBERDELTA)) {
                 for (ProtoMemberDelta memberDelta : deltaRecords.memberdelta()) {
                     statement.setInt(1, memberDelta.rowId());
                     statement.setInt(2, memberDelta.memberId());
@@ -282,7 +378,7 @@ public class SearchContext {
         SearchContext.LOGGER.info("Initial delta records inserted into database!");
     }
 
-    private void ensureMavenIndexInitialized() {
+    private synchronized void ensureMavenIndexInitialized() {
         if (this.aborted) {
             return;
         }
@@ -485,12 +581,12 @@ public class SearchContext {
             Set<String> removedClasses = new LinkedHashSet<>(lastClasses);
             removedClasses.removeAll(artifact.classes);
 
-            Set<String> deltaClasses = new LinkedHashSet<>();
+            Set<@NotNull String> deltaClasses = new LinkedHashSet<>();
             deltaClasses.addAll(newClasses);
             deltaClasses.addAll(removedClasses);
             deltaClasses.addAll(updatedClasses);
 
-            Map<String, ChangeType> deltaClassTypes = new TreeMap<>();
+            Map<@NotNull String, ChangeType> deltaClassTypes = new TreeMap<>();
             Set<String> updatedPackages = new LinkedHashSet<>();
             for (String deltaClass : deltaClasses) {
                 ChangeType deltaType;
@@ -506,30 +602,19 @@ public class SearchContext {
                 }
 
                 deltaClassTypes.put(deltaClass, deltaType);
-
-                int slashIndex = deltaClass.lastIndexOf('/');
-                if (slashIndex < 0) {
-                    updatedPackages.add(DeltaDB.DEFAULT_PACKAGE_NAME);
-                } else {
-                    updatedPackages.add(deltaClass.substring(0, slashIndex));
-                }
+                updatedPackages.add(DeltaDB.getPackageName(deltaClass));
             }
 
             Set<String> currentPackages = new LinkedHashSet<>();
             for (String currentClass : artifact.classes) {
-                int slashIndex = currentClass.lastIndexOf('/');
-                if (slashIndex < 0) {
-                    currentPackages.add(DeltaDB.DEFAULT_PACKAGE_NAME);
-                } else {
-                    currentPackages.add(currentClass.substring(0, slashIndex));
-                }
+                currentPackages.add(DeltaDB.getPackageName(currentClass));
             }
 
             Set<String> removedPackages = new LinkedHashSet<>(lastPackages);
             removedPackages.removeAll(currentPackages);
             Set<String> addedPackages = new LinkedHashSet<>(currentPackages);
             addedPackages.removeAll(lastPackages);
-            Set<String> deltaPackages = new TreeSet<>();
+            Set<@NotNull String> deltaPackages = new TreeSet<>();
             deltaPackages.addAll(addedPackages);
             deltaPackages.addAll(removedPackages);
             deltaPackages.addAll(updatedPackages);
@@ -541,7 +626,7 @@ public class SearchContext {
                     deltaType = ChangeType.ADDED;
                     int packageUID = packageIds.size();
                     packageIdLookup.put(deltaPackage, packageUID);
-                    packageIds.add(new ProtoPackageId(packageUID, gaUID, Objects.requireNonNull(deltaPackage)));
+                    packageIds.add(new ProtoPackageId(packageUID, gaUID, deltaPackage));
                 } else if (removedPackages.contains(deltaPackage)) {
                     deltaType = ChangeType.REMOVED;
                 } else if (updatedPackages.contains(deltaPackage)) {
@@ -555,21 +640,14 @@ public class SearchContext {
                 packageDeltas.add(new ProtoPackageDelta(changeUID, packageUID, gavUID, deltaType.ordinal()));
             }
 
-            for (Map.Entry<String, ChangeType> deltaClass : deltaClassTypes.entrySet()) {
+            for (Map.Entry<@NotNull String, ChangeType> deltaClass : deltaClassTypes.entrySet()) {
                 int classUID;
                 if (classIdLookup.containsKey(deltaClass.getKey())) {
                     classUID = classIdLookup.get(deltaClass.getKey());
                 } else {
-                    int packageUID;
-                    int slashIndex = deltaClass.getKey().lastIndexOf('/');
-                    if (slashIndex < 0) {
-                        packageUID = packageIdLookup.get(DeltaDB.DEFAULT_PACKAGE_NAME);
-                    } else {
-                        packageUID = packageIdLookup.get(deltaClass.getKey().substring(0, slashIndex));
-                    }
-                    classUID = classIds.size();
-                    classIdLookup.put(deltaClass.getKey(), classUID);
-                    classIds.add(new ProtoClassId(classUID, packageUID, deltaClass.getKey().substring(slashIndex + 1)));
+                    int packageUID = packageIdLookup.get(DeltaDB.getPackageName(deltaClass.getKey()));
+                    classIdLookup.put(deltaClass.getKey(), (classUID = classIds.size()));
+                    classIds.add(new ProtoClassId(classUID, packageUID, DeltaDB.getClassShortName(deltaClass.getKey())));
                 }
 
                 int changeUID = classDeltas.size();
@@ -779,16 +857,342 @@ public class SearchContext {
         return Objects.requireNonNull(records.iterator());
     }
 
-    private void updateMavenIndex(@NotNull Map<MavenArtifact, byte[]> addedArtifacts) {
+    private synchronized void updateDeltaDB(@NotNull Map<MavenArtifact, byte @NotNull[]> addedArtifacts) {
         if (this.aborted) {
             return;
         }
 
         long timestamp = System.currentTimeMillis();
-        Path parentDir = Objects.requireNonNull(this.config.repositoryPath.getParent(), "parent must not be null");
+
+        ClassFileReader classReader = new ClassFileReader();
+        artifactLoop:
+        for (Map.Entry<MavenArtifact, byte @NotNull[]> entry : addedArtifacts.entrySet()) {
+            MavenArtifact artifactLocation = entry.getKey();
+            byte[] artifactContent = entry.getValue();
+
+            if (!artifactLocation.type().equals("jar") || !artifactLocation.classifier().equals("")) {
+                continue artifactLoop;
+            }
+
+            try {
+                this.searchDatabaseConnection.setAutoCommit(false);
+
+                // lookup artifact GAid
+                int gaId = -1;
+                try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("SELECT rowid FROM gaid WHERE groupid = ? AND artifactid = ?")) {
+                    statement.setString(1, artifactLocation.gav().group());
+                    statement.setString(2, artifactLocation.gav().artifact());
+
+
+                    try (ResultSet gaidLookup = statement.executeQuery()) {
+                        if (gaidLookup.next()) {
+                            gaId = gaidLookup.getInt(1);
+                        }
+                    }
+                }
+
+                ArtifactContentIndex previousIndex = new ArtifactContentIndex(true);
+
+                lookupPreviousVersion:
+                if (gaId >= 0) {
+                    // lookup versions
+                    NavigableMap<MavenVersion, Integer> gavIds = new TreeMap<>();
+                    try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement("SELECT rowId, version FROM gavid WHERE gaId = ?")) {
+                        statement.setInt(1, gaId);
+
+                        try (ResultSet results = statement.executeQuery()) {
+                            while (results.next()) {
+                                int gavId = results.getInt(1);
+                                gavIds.put(MavenVersion.parse(Objects.requireNonNull(results.getString(2))), gavId);
+                            }
+                        }
+                    }
+
+                    MavenVersion thisVersion = MavenVersion.parse(artifactLocation.gav().version());
+                    Map.Entry<MavenVersion, Integer> latest = gavIds.lowerEntry(thisVersion);
+
+                    if (gavIds.higherEntry(thisVersion) != null) {
+                        SearchContext.LOGGER.warn("Published version '{}' is not the latest version. Delta Database is likely inconsistent now. Delete database file to let it regenerate naturally.", thisVersion);
+                    }
+
+                    SearchContext.LOGGER.info("Version '{}' succeeds '{}'", thisVersion, latest);
+
+                    String previousVersion = latest.getKey().getOriginText();
+                    GAV gav = entry.getKey().gav();
+                    if (previousVersion == null) {
+                        throw new NullPointerException("MavenVersion#getOriginText returned null!");
+                    }
+                    Path previousJar = this.config.repositoryPath().resolve(gav.group().replace('.', '/')).resolve(gav.artifact()).resolve(previousVersion).resolve(gav.artifact() + "-" + previousVersion + ".jar");
+
+                    if (Files.notExists(previousJar)) {
+                        SearchContext.LOGGER.warn("File '{}' does not exist. This shouldn't happen regularly; the repository might be malformed/corrupted!", previousJar);
+                        break lookupPreviousVersion;
+                    }
+
+                    try {
+                        previousIndex = SearchContext.generateArtifactContentIndex(previousJar, classReader);
+                    } catch (IOException e) {
+                        SearchContext.LOGGER.error("Failed to read artifact file '{}'!", previousJar, e);
+                    }
+                }
+
+                ArtifactContentIndex currentIndex;
+                try {
+                    currentIndex = SearchContext.generateArtifactContentIndex(artifactLocation.toString(), artifactContent, classReader);
+                } catch (IOException e) {
+                    SearchContext.LOGGER.error("Cannot update delta DB for artifact {}", artifactLocation);
+                    continue artifactLoop;
+                }
+
+                Changeset changes = currentIndex.generateChangesetFrom(previousIndex);
+
+                // Write non-existent GAid
+                if (gaId < 0) {
+                    try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_GAID_PARTIAL, SearchContext.GENERATED_ROWID_COLUMNS)) {
+                        statement.setString(1, artifactLocation.gav().group());
+                        statement.setString(2, artifactLocation.gav().artifact());
+
+                        if (statement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("An unexpected scenario was raised whilst allocating GAid for project '{}'! The database might have been corrupted!", artifactLocation);
+                        }
+
+                        try (ResultSet generatedKeys = statement.getGeneratedKeys()) {
+                            if (!generatedKeys.next()) {
+                                SearchContext.LOGGER.error("No rows in #getGeneratedKeys result after allocating GAid.");
+                            }
+                            gaId = generatedKeys.getInt(1);
+                            if (generatedKeys.next()) {
+                                SearchContext.LOGGER.warn("More than one row in #getGeneratedKeys result after allocating GAid. Ignoring");
+                            }
+                        }
+                    }
+                }
+
+                // Write GAVid
+                int gavId;
+                try (PreparedStatement statement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_GAVID_PARTIAL, SearchContext.GENERATED_ROWID_COLUMNS)) {
+                    statement.setInt(1, gaId);
+                    statement.setString(2, artifactLocation.gav().version());
+
+                    gavId = SearchContext.executeSingleUpdateGetROWID(statement, "GAVid", artifactLocation);
+                }
+
+                // Write package deltas (+ new packages)
+                try (PreparedStatement packageInsertStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_PACKAGEID_PARTIAL, SearchContext.GENERATED_ROWID_COLUMNS);
+                        PreparedStatement packageLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_PACKAGEID);
+                        PreparedStatement packageDeltaStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_PACKAGEDELTA_PARTIAL)) {
+                    packageLookupStatement.setInt(1, gaId);
+                    packageInsertStatement.setInt(1, gaId);
+                    packageDeltaStatement.setInt(2, gavId);
+
+                    packageDeltaStatement.setInt(3, ChangeType.ADDED.ordinal());
+                    for (ArtifactContentPackage pkg : changes.getPackageDeltas().getNewEntries()) {
+                        packageLookupStatement.setString(2, pkg.getName());
+
+
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, false, "package", pkg);
+                        if (packageId < 0) {
+                            packageInsertStatement.setString(2, pkg.getName());
+                            packageId = SearchContext.executeSingleUpdateGetROWID(packageInsertStatement, "PackageId", pkg);
+                        }
+
+                        packageDeltaStatement.setInt(1, packageId);
+                        if (packageDeltaStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert package addition delta for package {} in project {}!", pkg, artifactLocation);
+                        }
+                    }
+
+                    packageDeltaStatement.setInt(3, ChangeType.REMOVED.ordinal());
+                    for (ArtifactContentPackage pkg : changes.getPackageDeltas().getRemovedEntries()) {
+                        packageLookupStatement.setString(2, pkg.getName());
+
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", pkg);
+
+                        packageDeltaStatement.setInt(1, packageId);
+                        if (packageDeltaStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert package removal delta for package {} in project {}!", pkg, artifactLocation);
+                        }
+                    }
+
+                    packageDeltaStatement.setInt(3, ChangeType.CONTENTS_CHANGED.ordinal());
+                    for (ArtifactContentPackage pkg : changes.getPackageDeltas().getChangedEntries()) {
+                        packageLookupStatement.setString(2, pkg.getName());
+
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", pkg);
+
+                        packageDeltaStatement.setInt(1, packageId);
+                        if (packageDeltaStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert package altercation delta for package {} in project {}!", pkg, artifactLocation);
+                        }
+                    }
+                }
+
+                // Write class deltas (+ new classes)
+                try (PreparedStatement classInsertStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_CLASSID_PARTIAL, SearchContext.GENERATED_ROWID_COLUMNS);
+                        PreparedStatement classLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_CLASSID);
+                        PreparedStatement deltaInsertStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_CLASSDELTA_PARTIAL);
+                        PreparedStatement packageLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_PACKAGEID)) {
+                    packageLookupStatement.setInt(1, gaId);
+                    deltaInsertStatement.setInt(2, gavId);
+
+                    deltaInsertStatement.setInt(3, ChangeType.ADDED.ordinal());
+                    for (ArtifactContentClass clazz : changes.getClassDeltas().getNewEntries()) {
+                        String packageName = clazz.getPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = clazz.getClassShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, false, "class", clazz);
+                        if (classId < 0) {
+                            classInsertStatement.setInt(1, packageId);
+                            classInsertStatement.setString(2, classShortName);
+                            classId = SearchContext.executeSingleUpdateGetROWID(classInsertStatement, "ClassId", clazz);
+                        }
+
+                        deltaInsertStatement.setInt(1, classId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert addition delta for class {} in project {}!", clazz, artifactLocation);
+                        }
+                    }
+
+                    deltaInsertStatement.setInt(3, ChangeType.REMOVED.ordinal());
+                    for (ArtifactContentClass clazz : changes.getClassDeltas().getRemovedEntries()) {
+                        String packageName = clazz.getPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = clazz.getClassShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, true, "class", clazz);
+
+                        deltaInsertStatement.setInt(1, classId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert removal delta for class {} in project {}!", clazz, artifactLocation);
+                        }
+                    }
+
+                    deltaInsertStatement.setInt(3, ChangeType.CONTENTS_CHANGED.ordinal());
+                    for (ArtifactContentClass clazz : changes.getClassDeltas().getChangedEntries()) {
+                        String packageName = clazz.getPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = clazz.getClassShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, true, "class", clazz);
+
+                        deltaInsertStatement.setInt(1, classId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert altercation delta for class {} in project {}!", clazz, artifactLocation);
+                        }
+                    }
+                }
+
+                // Write new class members (+ deltas)
+                try (PreparedStatement memberInsertStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_MEMBERID_PARTIAL, SearchContext.GENERATED_ROWID_COLUMNS);
+                        PreparedStatement memberLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_MEMBERID);
+                        PreparedStatement classLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_CLASSID);
+                        PreparedStatement deltaInsertStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_INSERT_MEMBERDELTA_PARTIAL);
+                        PreparedStatement packageLookupStatement = this.searchDatabaseConnection.prepareStatement(DeltaDB.SQL_PREPARED_LOOKUP_PACKAGEID)) {
+                    packageLookupStatement.setInt(1, gaId);
+                    deltaInsertStatement.setInt(2, gavId);
+
+                    deltaInsertStatement.setInt(3, ChangeType.ADDED.ordinal());
+                    for (ArtifactContentClassMember member : changes.getMemberDeltas().getNewEntries()) {
+                        String packageName = member.getOwnerPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = member.getOwnerShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, true, "class", member);
+                        memberLookupStatement.setInt(1, classId);
+                        memberLookupStatement.setString(2, member.getName());
+                        memberLookupStatement.setString(3, member.getDesc());
+                        int memberId = SearchContext.executeLookupUID(memberLookupStatement, false, "member", member);
+                        if (memberId < 0) {
+                            memberInsertStatement.setInt(1, classId);
+                            memberInsertStatement.setString(2, member.getName());
+                            memberInsertStatement.setString(3, member.getDesc());
+                            memberId = SearchContext.executeSingleUpdateGetROWID(memberInsertStatement, "MemberId", member);
+                        }
+
+                        deltaInsertStatement.setInt(1, memberId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert addition delta for member {} in project {}!", member, artifactLocation);
+                        }
+                    }
+
+                    deltaInsertStatement.setInt(3, ChangeType.REMOVED.ordinal());
+                    for (ArtifactContentClassMember member : changes.getMemberDeltas().getRemovedEntries()) {
+                        String packageName = member.getOwnerPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = member.getOwnerShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, true, "class", member);
+                        memberLookupStatement.setInt(1, classId);
+                        memberLookupStatement.setString(2, member.getName());
+                        memberLookupStatement.setString(3, member.getDesc());
+                        int memberId = SearchContext.executeLookupUID(memberLookupStatement, true, "member", member);
+
+                        deltaInsertStatement.setInt(1, memberId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert removal delta for member {} in project {}!", member, artifactLocation);
+                        }
+                    }
+
+                    deltaInsertStatement.setInt(3, ChangeType.CONTENTS_CHANGED.ordinal());
+                    for (ArtifactContentClassMember member : changes.getMemberDeltas().getChangedEntries()) {
+                        String packageName = member.getOwnerPackageName();
+                        packageLookupStatement.setString(2, packageName);
+                        int packageId = SearchContext.executeLookupUID(packageLookupStatement, true, "package", packageName);
+                        classLookupStatement.setInt(1, packageId);
+                        String classShortName = member.getOwnerShortName();
+                        classLookupStatement.setString(2, classShortName);
+                        int classId = SearchContext.executeLookupUID(classLookupStatement, true, "class", member);
+                        memberLookupStatement.setInt(1, classId);
+                        memberLookupStatement.setString(2, member.getName());
+                        memberLookupStatement.setString(3, member.getDesc());
+                        int memberId = SearchContext.executeLookupUID(memberLookupStatement, true, "member", member);
+
+                        deltaInsertStatement.setInt(1, memberId);
+                        if (deltaInsertStatement.executeUpdate() <= 0) {
+                            SearchContext.LOGGER.error("Unable to insert altercation delta for member {} in project {}!", member, artifactLocation);
+                        }
+                    }
+                }
+
+                this.searchDatabaseConnection.commit();
+                this.searchDatabaseConnection.setAutoCommit(true);
+            } catch (SQLException e1) {
+                SearchContext.LOGGER.error("Cannot update delta DB for artifact {}", artifactLocation, e1);
+                try {
+                    this.searchDatabaseConnection.rollback();
+                    this.searchDatabaseConnection.setAutoCommit(true);
+                } catch (SQLException e2) {
+                    SearchContext.LOGGER.error("Unable to roll back transaction", e2);
+                }
+                continue artifactLoop;
+            }
+        }
+
+        SearchContext.LOGGER.info("Delta database updated ({}ms)", System.currentTimeMillis() - timestamp);
+    }
+
+    private synchronized void updateMavenIndex(@NotNull Map<MavenArtifact, byte[]> addedArtifacts) {
+        if (this.aborted) {
+            return;
+        }
+
+        long timestamp = System.currentTimeMillis();
+
+        Path mainIndexFile = this.mavenIndexDir.resolve("nexus-maven-repository-index.gz");
 
         List<Map<String, String>> records = new ArrayList<>();
-        try (IndexReader reader = new IndexReader(null, new PathWritableResourceHandler(parentDir))) {
+        try (IndexReader reader = new IndexReader(null, new PathWritableResourceHandler(this.mavenIndexDir))) {
             Iterator<ChunkReader> it = reader.iterator();
             while (it.hasNext()) {
                 try (ChunkReader chunkReader = it.next()) {
@@ -812,7 +1216,7 @@ public class SearchContext {
         for (Map.Entry<MavenArtifact, byte[]> entry : addedArtifacts.entrySet()) {
             MavenArtifact addedArtifact = entry.getKey();
 
-            if ((addedArtifact.classifier() != null && !addedArtifact.type().isEmpty()) || !addedArtifact.type().equals("pom")) {
+            if (!addedArtifact.classifier().isEmpty() || !addedArtifact.type().equals("pom")) {
                 continue;
             }
 
@@ -844,7 +1248,7 @@ public class SearchContext {
                 expanded.put(Record.SHA1, checksum.toLowerCase(Locale.ROOT));
             }
 
-            if (addedArtifact.classifier() != null && !addedArtifact.classifier().isEmpty()) {
+            if (!addedArtifact.classifier().isEmpty()) {
                 expanded.put(Record.CLASSIFIER, addedArtifact.classifier());
             } else if (addedArtifact.type().equals("jar")) {
                 try (ZipArchive archive = ZipIO.readJvm(artifactContents)) {
@@ -904,7 +1308,7 @@ public class SearchContext {
             records.add(new RecordCompactor().apply(entryRecord));
         }
 
-        try (IndexWriter writer = new IndexWriter(new PathWritableResourceHandler(parentDir), this.config.repositoryId, false)) {
+        try (IndexWriter writer = new IndexWriter(new PathWritableResourceHandler(this.mavenIndexDir), this.config.repositoryId, false)) {
             writer.writeChunk(records.iterator());
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to write maven repository index", e);
