@@ -379,20 +379,15 @@ public class SearchContext {
     }
 
     private synchronized void ensureMavenIndexInitialized() {
-        if (this.aborted) {
-            return;
-        }
-
-        Path mainIndexFile = this.mavenIndexDir.resolve("nexus-maven-repository-index.gz");
-
-        if (Files.exists(mainIndexFile)) {
+        if (this.aborted
+                || Files.exists(this.mavenIndexDir.resolve("nexus-maven-repository-index.gz"))) {
             return;
         }
 
         try {
             Files.createDirectories(this.mavenIndexDir);
         } catch (IOException e) {
-            SearchContext.LOGGER.warn("Unable to create directory to maven index: {}", e);
+            SearchContext.LOGGER.warn("Unable to create directory for maven index file: {}", e);
         }
 
         SearchContext.LOGGER.info("Performing first-time maven indexing; this may take a while.");
@@ -1188,8 +1183,6 @@ public class SearchContext {
         }
 
         long timestamp = System.currentTimeMillis();
-
-        Path mainIndexFile = this.mavenIndexDir.resolve("nexus-maven-repository-index.gz");
 
         List<Map<String, String>> records = new ArrayList<>();
         try (IndexReader reader = new IndexReader(null, new PathWritableResourceHandler(this.mavenIndexDir))) {

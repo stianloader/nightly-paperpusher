@@ -99,16 +99,16 @@ final class DeltaServer {
                         entries.put(version, changeType);
                         switch (changeType) {
                         case ChangeType.ADDED:
-                            if (introducedVersion == null || version.isNewerThan(introducedVersion)) {
-                                discontinious = introducedVersion != null;
+                            discontinious = introducedVersion != null; // The element was added more than once
+                            if (introducedVersion == null || introducedVersion.isNewerThan(version)) {
                                 introducedVersion = version;
                             }
-                            if (lastIntroduction == null || lastIntroduction.isNewerThan(version)) {
+                            if (lastIntroduction == null || version.isNewerThan(lastIntroduction)) {
                                 lastIntroduction = version;
                             }
                             break;
                         case ChangeType.REMOVED:
-                            if (removedVersion == null || removedVersion.isNewerThan(version)) {
+                            if (removedVersion == null || version.isNewerThan(removedVersion)) {
                                 removedVersion = version;
                             }
                             break;
@@ -132,7 +132,7 @@ final class DeltaServer {
                 if (!available) {
                     htmlOut.append("<span style=\"color:red\"> Removed in ").append(Objects.requireNonNull(removedVersion).getOriginText()).append("</span>");
                 } else if (discontinious) {
-                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion).append("</span>");
+                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion.getOriginText()).append("</span>");
                 } else if (removedVersion != null) {
                     throw new IllegalStateException("removedVersion != null");
                 }
@@ -248,16 +248,16 @@ final class DeltaServer {
                         entries.put(version, changeType);
                         switch (changeType) {
                         case ChangeType.ADDED:
-                            if (introducedVersion == null || version.isNewerThan(introducedVersion)) {
-                                discontinious = introducedVersion != null;
+                            discontinious = introducedVersion != null; // The element was added more than once
+                            if (introducedVersion == null || introducedVersion.isNewerThan(version)) {
                                 introducedVersion = version;
                             }
-                            if (lastIntroduction == null || lastIntroduction.isNewerThan(version)) {
+                            if (lastIntroduction == null || version.isNewerThan(lastIntroduction)) {
                                 lastIntroduction = version;
                             }
                             break;
                         case ChangeType.REMOVED:
-                            if (removedVersion == null || removedVersion.isNewerThan(version)) {
+                            if (removedVersion == null || version.isNewerThan(removedVersion)) {
                                 removedVersion = version;
                             }
                             break;
@@ -296,7 +296,7 @@ final class DeltaServer {
                 if (!available) {
                     htmlOut.append("<span style=\"color:red\"> Removed in ").append(Objects.requireNonNull(removedVersion).getOriginText()).append("</span>");
                 } else if (discontinious) {
-                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion).append("</span>");
+                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion.getOriginText()).append("</span>");
                 } else if (removedVersion != null) {
                     throw new IllegalStateException("removedVersion != null");
                 }
@@ -371,16 +371,16 @@ final class DeltaServer {
                         entries.put(version, changeType);
                         switch (changeType) {
                         case ChangeType.ADDED:
-                            if (introducedVersion == null || version.isNewerThan(introducedVersion)) {
-                                discontinious = introducedVersion != null;
+                            discontinious = introducedVersion != null; // The element was added more than once
+                            if (introducedVersion == null || introducedVersion.isNewerThan(version)) {
                                 introducedVersion = version;
                             }
-                            if (lastIntroduction == null || lastIntroduction.isNewerThan(version)) {
+                            if (lastIntroduction == null || version.isNewerThan(lastIntroduction)) {
                                 lastIntroduction = version;
                             }
                             break;
                         case ChangeType.REMOVED:
-                            if (removedVersion == null || removedVersion.isNewerThan(version)) {
+                            if (removedVersion == null || version.isNewerThan(removedVersion)) {
                                 removedVersion = version;
                             }
                             break;
@@ -404,7 +404,7 @@ final class DeltaServer {
                 if (!available) {
                     htmlOut.append("<span style=\"color:red\"> Removed in ").append(Objects.requireNonNull(removedVersion).getOriginText()).append("</span>");
                 } else if (discontinious) {
-                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion).append("</span>");
+                    htmlOut.append("<span style=\"color:orange\"> Warning: Intermittently available starting from version ").append(introducedVersion.getOriginText()).append("</span>");
                 } else if (removedVersion != null) {
                     throw new IllegalStateException("removedVersion != null");
                 }
