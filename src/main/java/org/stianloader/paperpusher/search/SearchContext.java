@@ -218,6 +218,8 @@ public class SearchContext {
         server.get(finalPrefix + "/packages/{groupid}/{artifactid}", (ctx) -> DeltaServer.listPackages(this.searchDatabaseConnection, ctx));
         server.get(finalPrefix + "/classes/{groupid}/{artifactid}/{package}", (ctx) -> DeltaServer.listClasses(this.searchDatabaseConnection, ctx));
         server.get(finalPrefix + "/members/{groupid}/{artifactid}/{package}/{class}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
+        server.get(finalPrefix + "/versions/{groupid}/{artifactid}", ctx -> DeltaServer.listVersions(this.searchDatabaseConnection, ctx));
+        server.get(finalPrefix + "/changelog/{groupid}/{artifactid}/{version}", ctx -> DeltaServer.listVersionChanges(this.searchDatabaseConnection, ctx));
 
         publish.addPublicationListener(this::updateMavenIndex);
         publish.addPublicationListener(this::updateDeltaDB);

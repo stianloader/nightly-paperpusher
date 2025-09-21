@@ -2,21 +2,42 @@ package org.stianloader.paperpusher.search;
 
 import java.util.List;
 
+import javax.annotation.Nonnegative;
+
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
 
 class DeltaDB {
 
     enum ChangeType {
-        ADDED,
-        CONTENTS_CHANGED,
-        REMOVED;
+        ADDED("added"),
+        CONTENTS_CHANGED("touched"),
+        REMOVED("removed");
 
         private static final @NotNull ChangeType @NotNull[] INTERNAL_LOOKUP = ChangeType.values();
 
+        @Contract(pure = true)
+        public static final int getValueCount() {
+            return ChangeType.INTERNAL_LOOKUP.length;
+        }
+
         @NotNull
-        public static final ChangeType lookupValue(int ordinal) {
+        @Contract(pure = true)
+        public static final ChangeType lookupValue(@Nonnegative int ordinal) {
             return ChangeType.INTERNAL_LOOKUP[ordinal];
+        }
+
+        @NotNull
+        private final String verb;
+
+        private ChangeType(@NotNull String verb) {
+            this.verb = verb;
+        }
+
+        @NotNull
+        @Contract(pure = true)
+        public String getVerb() {
+            return this.verb;
         }
     }
 
@@ -99,10 +120,22 @@ class DeltaDB {
     static final String SQL_PREPARED_INSERT_PACKAGEID_PARTIAL = "INSERT OR FAIL INTO packageid (gaId, packageName) VALUES (?, ?)";
 
     @NotNull
+    static final String SQL_PREPARED_LOOKUP_CLASS_DELTAS_FULL = "SELECT changetype, packageName, className FROM classdelta, classid, packageid WHERE versionId = ? AND classdelta.classId = classid.rowid AND classid.packageId = packageid.rowid";
+
+    @NotNull
     static final String SQL_PREPARED_LOOKUP_CLASSID = "SELECT rowid FROM classid WHERE packageId = ? AND className = ?";
 
     @NotNull
+    static final String SQL_PREPARED_LOOKUP_GAVID = "SELECT rowid FROM gavid WHERE gaId = ? AND version = ?";
+
+    @NotNull
+    static final String SQL_PREPARED_LOOKUP_MEMBER_DELTAS_FULL = "SELECT changetype, packageName, className, memberName, memberDesc FROM memberdelta, memberid, classid, packageid WHERE versionId = ? AND memberdelta.memberId = memberid.rowid AND memberid.classId = classid.rowid AND classid.packageId = packageid.rowid";
+
+    @NotNull
     static final String SQL_PREPARED_LOOKUP_MEMBERID = "SELECT rowid FROM memberid WHERE classId = ? AND memberName = ? AND memberDesc = ?";
+
+    @NotNull
+    static final String SQL_PREPARED_LOOKUP_PACKAGE_DELTAS_FULL = "SELECT changetype, packageName FROM packagedelta, packageid WHERE versionId = ? AND packagedelta.packageid = packageid.rowid";
 
     @NotNull
     static final String SQL_PREPARED_LOOKUP_PACKAGEID = "SELECT rowid FROM packageid WHERE gaId = ? AND packageName = ?";

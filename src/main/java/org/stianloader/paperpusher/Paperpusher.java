@@ -83,7 +83,7 @@ public class Paperpusher {
         }
 
         javalinServer.get("/getpid", (ctx) -> {
-            ctx.result(Long.toUnsignedString(ProcessHandle.current().pid()) + "");
+            ctx.result(Long.toUnsignedString(ProcessHandle.current().pid()));
             ctx.status(HttpStatus.OK);
         });
 
@@ -122,7 +122,7 @@ public class Paperpusher {
         try {
             Files.writeString(at, cfg.toString(2), StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
         } catch (JSONException | IOException e) {
-            LOGGER.error("Unable to write default configuration", e);
+            Paperpusher.LOGGER.error("Unable to write default configuration", e);
             return;
         }
     }

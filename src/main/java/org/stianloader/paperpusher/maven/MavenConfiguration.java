@@ -10,7 +10,7 @@ import org.slf4j.LoggerFactory;
 import io.javalin.Javalin;
 import io.javalin.http.HttpStatus;
 
-public record MavenConfiguration(String signCmd, Path mavenOutputPath, String mavenBindPrefix) {
+public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, String mavenBindPrefix) {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MavenConfiguration.class);
 

@@ -138,8 +138,8 @@ public class JavadocUnpackContext {
                 try {
                     if (!filePath.toRealPath().startsWith(this.srcPath.toRealPath())) {
                         LoggerFactory.getLogger(JavadocUnpackContext.class).warn("Potential path traversal attempt from {} (UA {}); Query path: {}; Resolved to: {}", ctx.ip(), ctx.userAgent(), ctx.path(), filePath.toRealPath());
-                        ctx.result("HTTP error code 500: Path traversal detected. This incident will be reported.");
-                        ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+                        ctx.result("HTTP error code 403 (forbidden): Path traversal detected. This incident will be reported.");
+                        ctx.status(HttpStatus.FORBIDDEN);
                         throw new HandledException();
                     }
                     return this.lookupCacheRecord(entry.getKey(), filePath);
