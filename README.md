@@ -29,6 +29,7 @@ following notable features:
 
 - Artifacts are indexed using the nexus-maven-repository-index
 - Javadocs can easily be obtained via an endpoint
+- Keeps track of when methods, fields, classes, and packages are added and removed
 - This application is developed to be run using graal native-image first and foremost
 
 ## Endpoints
@@ -77,14 +78,35 @@ Groups within the javadoc index list are sorted alphabetically,
 same goes for artifact ids. Versions are however sorted according to
 maven's version order specification as implemented by picoresolve.
 
-Although planned, at this point of time it is not supported to
-make use of version ranges.
-
-It is also planned, but not yet supported, to remove specific
-groups and artifacts from the javadoc index.
-
 Groups, artifacts and versions that do not have a javadoc
 artifact attached to them are discarded and not shown in the javadoc index.
+
+### Search/Delta Endpoint
+
+- Default bind prefix: `/search/`
+
+This is the endpoint on which the version history pages are served from.
+The endpoint is also internally responsible for maintianing the maven index files.
+
+The following pages are defined
+- `<search-bind-prefix>/projects`
+- `<search-bind-prefix>/packages/<group>/<artifact>`
+- `<search-bind-prefix>/classes/<group>/<artifact>/<package>`
+- `<search-bind-prefix>/members/<group>/<artifact>/<package>/<class>`
+- `<search-bind-prefix>/versions/<group>/<version>`
+- `<search-bind-prefix>/changelog/<group>/<artifact>/<version>`
+
+Note: Unlike the javadoc endpoint, there is no trailing slash.
+`<package>` uses the full stop ('.') character as the package delimiter,
+while `<class>` only is the class name. That is for the fully qualified name
+of the class `org/stianloader/launcher/Launcher`, `<package>` would be
+`org.stianloader.launcher` and `<class>` would be `Launcher`.
+
+The deltas between versions is stored using SQLite in the
+`paperpusher-search-indices-v000-0.db` file (file name might
+change slightly in future versions as incompatible changes are made).
+It is safe to delete the database file whilst the server is offline.
+The database file will be regenerated on server startup.
 
 ### Administrative endpoints
 
@@ -118,5 +140,5 @@ The cost of graal would be a slower repository overall, but that is usually
 acceptable unless you have very high throughput (which this software is not designed
 to handle anyways).
 
-Just execute the `graal-compile` script with Graal 22 as your current JVM and
+Just execute the `graal-compile` script with Graal 25 as your current JVM and
 you are good to go!

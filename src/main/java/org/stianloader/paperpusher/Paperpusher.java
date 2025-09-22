@@ -230,7 +230,7 @@ public class Paperpusher {
     static {
         String str;
         try {
-            str = new String(Paperpusher.class.getClassLoader().getResourceAsStream("nightly-paperpusher.version").readAllBytes(), StandardCharsets.UTF_8);
+            str = new String(Paperpusher.class.getResourceAsStream("/nightly-paperpusher.version").readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException e) {
             e.printStackTrace();
             str = "v?";

@@ -65,7 +65,7 @@
         <dependency>
             <groupId>org.stianloader</groupId>
             <artifactId>picoresolve</artifactId>
-            <version>1.0.0-a20241022</version>
+            <version>1.0.0-a20250903</version>
             <scope>compile</scope>
         </dependency>
 
@@ -148,7 +148,7 @@
                             <execution>
                                 <id>build-native</id>
                                 <goals>
-                                    <goal>build</goal>
+                                    <goal>compile-no-fork</goal>
                                 </goals>
                                 <phase>package</phase>
                             </execution>
@@ -164,10 +164,8 @@
                             <fallback>false</fallback>
                             <buildArgs>
                                 <buildArg>-march=x86-64-v3</buildArg>
-                                <buildArg>-R:MaxHeapSize=64M</buildArg>
-                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg> <!-- Foreign API support is experimental -->
-                                <buildArg>-H:ResourceConfigurationFiles=${project.basedir}/src/assembly/resource-config.json</buildArg> <!-- Note: Graal will complain about this being experimental and there being other ways of doing that - as far as I was able to test that is not the case. This is the only way of solving our issues. -->
-                                <buildArg>-H:+ForeignAPISupport</buildArg> <!-- Required for LLJZip -->
+                                <buildArg>-R:MaxHeapSize=256M</buildArg>
+                                <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
                             </buildArgs>
                             <agent>
                                 <enabled>true</enabled>
@@ -203,7 +201,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.14.0</version>
                 <configuration>
-                    <release>22</release>
+                    <release>25</release>
                 </configuration>
             </plugin>
             <!-- https://mvnrepository.com/artifact/org.apache.maven.plugins/maven-source-plugin -->
@@ -302,7 +300,6 @@
                             <Built-By>${env.USERNAME}</Built-By>
                         </manifestEntries>
                         <addMavenDescriptor>true</addMavenDescriptor>
-                        <compress>false</compress>
                     </archive>
                 </configuration>
             </plugin>
