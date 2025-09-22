@@ -33,6 +33,14 @@ import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import software.coley.cafedude.InvalidClassException;
+import software.coley.cafedude.classfile.ClassFile;
+import software.coley.cafedude.classfile.attribute.ModuleAttribute;
+import software.coley.cafedude.classfile.attribute.ModuleHashesAttribute;
+import software.coley.cafedude.classfile.constant.CpUtf8;
+import software.coley.cafedude.io.ClassFileReader;
+import software.coley.cafedude.io.ClassFileWriter;
+
 import xmlparser.XmlParser;
 import xmlparser.error.InvalidXml;
 import xmlparser.model.XmlElement;
@@ -518,13 +526,48 @@ public class MavenPublishContext {
                             // TODO Also make this code work for shaded dependencies. Though this is of lower concern really.
                             // We would need to fetch the associated pom.properties file, which might not necessarily be present before the pom.xml
                             // - maybe we might need two sweeps?
+                            // Geolykt note (2025-09-22): I have no idea what "shared dependencies" even are. Let's just hope it's nothing.
+                            // Well, shading might be an issue though. Though in the current stianloader ecosystem
+                            // shading is becoming more and more frowned upon, so we might as well consider that
+                            // to be a non-priority
                             byte[] fullData = zipIn.readAllBytes();
-                            byte[] mapped = updatePOM(mappedVersions, fullData, originGAV);
+                            byte[] mapped = MavenPublishContext.updatePOM(mappedVersions, fullData, originGAV);
                             if (mapped == null) {
                                 zipOut.write(fullData);
                             } else {
                                 zipOut.write(mapped);
                             }
+                        } else if (zipEntry.getName().endsWith("/module-info.class")) {
+                            byte[] originalData = zipIn.readAllBytes();
+                            try {
+                                ClassFile file = new ClassFileReader().read(originalData);
+                                Class<ModuleAttribute> moduleAttributeClass = ModuleAttribute.class; // Hack to work around nullability assumptions
+                                ModuleAttribute moduleAttribute = file.getAttribute(moduleAttributeClass);
+                                if (Objects.nonNull(file.getAttribute(ModuleHashesAttribute.class))) {
+                                    MavenPublishContext.LOGGER.warn("module-info.class '{}' of artifact '{}' (mapped: '{}') has a ModuleHashesAttribute; nightly-paperpusher is unsure what it should do with it.", zipEntry.getName(), originGAV, transformedGAV);
+                                    ModuleHashesAttribute attr = file.getAttribute(ModuleHashesAttribute.class);
+                                    MavenPublishContext.LOGGER.warn("Algo name: {}", attr.getAlgorithmName());
+                                    MavenPublishContext.LOGGER.warn("Algo data: {}", attr.getModuleHashes());
+                                    throw new AssertionError();
+                                }
+
+                                if (Objects.isNull(moduleAttribute)) {
+                                    MavenPublishContext.LOGGER.error("module-info.class '{}' of artifact '{}' (mapped: '{}') has no module attribute; nightly-paperpusher is unsure what it should do with it.", zipEntry.getName(), originGAV, transformedGAV);
+                                    zipOut.write(originalData);
+                                } else {
+                                    CpUtf8 newversionCpUtf8 = new CpUtf8(transformedGAV.version());
+                                    file.getPool().add(newversionCpUtf8);
+                                    moduleAttribute.setVersion(newversionCpUtf8);
+                                    zipOut.write(new ClassFileWriter().write(file));
+                                }
+                            } catch (InvalidClassException e) {
+                                MavenPublishContext.LOGGER.warn("module-info.class '{}' of artifact '{}' (mapped: '{}') is malformed.", zipEntry.getName(), originGAV, transformedGAV, e);
+                            }
+                        } else if (zipEntry.getName().equals("extension.json") || zipEntry.getName().equals("/extension.json")) {
+                            byte[] originalData = zipIn.readAllBytes();
+                            JSONObject jsonObject = new JSONObject(new String(originalData, StandardCharsets.UTF_8));
+                            jsonObject.put("version", transformedGAV.version());
+                            zipOut.write(jsonObject.toString(4).getBytes(StandardCharsets.UTF_8));
                         } else {
                             zipIn.transferTo(zipOut);
                         }

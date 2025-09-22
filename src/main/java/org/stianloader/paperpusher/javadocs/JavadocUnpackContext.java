@@ -3,6 +3,7 @@ package org.stianloader.paperpusher.javadocs;
 import java.io.IOException;
 import java.lang.foreign.ValueLayout;
 import java.lang.ref.Cleaner;
+import java.lang.ref.Reference;
 import java.lang.ref.SoftReference;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,9 +26,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import javax.annotation.Nullable;
-
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 import org.stianloader.paperpusher.LLJZipUtils;
 import org.stianloader.paperpusher.Paperpusher;
@@ -223,6 +223,7 @@ public class JavadocUnpackContext {
         outputContext.result(bytes);
         outputContext.status(HttpStatus.OK);
         this.lastUsedRecord = cache;
+        Reference.reachabilityFence(this.lastUsedRecord);
     }
 
     @NotNull
@@ -304,7 +305,7 @@ public class JavadocUnpackContext {
         });
 
         try {
-            List<Path> metadataFiles = Files.find(this.srcPath, 6, (path, attributes) -> {
+            List<Path> metadataFiles = Files.find(this.srcPath, 6, (path, _) -> {
                 return path.endsWith("maven-metadata.xml");
             }).toList();
             Set<GAV> concurrentGAVs = ConcurrentHashMap.newKeySet();
@@ -350,7 +351,7 @@ public class JavadocUnpackContext {
                         }
                     }
                     GAV gav = new GAV(group.get(), artifactId.get(), artifactVersion);
-                    futures.add(resolver.download(gav, "javadoc", "jar", Executors.newVirtualThreadPerTaskExecutor()).exceptionally((ex) -> {
+                    futures.add(resolver.download(gav, "javadoc", "jar", Executors.newVirtualThreadPerTaskExecutor()).exceptionally((_) -> {
                         return null;
                     }).thenAccept((value) -> {
                         if (value != null && Files.exists(value.getValue())) {

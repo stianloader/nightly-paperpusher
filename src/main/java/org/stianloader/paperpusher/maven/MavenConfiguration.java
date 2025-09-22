@@ -29,7 +29,7 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
             while (getPath.codePointAt(0) == '/') {
                 getPath = getPath.substring(1);
             }
-            if (getPath.indexOf(':') != -1 || getPath.indexOf("..") != -1 || getPath.indexOf('&') != -1) {
+            if (getPath.indexOf(':') >= 0 || getPath.indexOf("..") >= 0 || getPath.indexOf('&') >= 0) {
                 ctx.status(HttpStatus.BAD_REQUEST);
                 ctx.result("HTTP error code 400 (Bad request) - It's not us, it's you (Malformed request path).");
                 return;
@@ -45,11 +45,11 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
 
         server.put(finalPrefix + "/*", (ctx) -> {
             String path = ctx.path().substring(finalPrefix.length());
-            LOGGER.info("Recieved data from {} ({}) at path '{}'", ctx.ip(), ctx.userAgent(), path);
+            MavenConfiguration.LOGGER.info("Recieved data from {} ({}) at path '{}'", ctx.ip(), ctx.userAgent(), path);
             while (path.indexOf(0) == '/') {
                 path = path.substring(1);
             }
-            if (path.indexOf(':') != -1 || path.indexOf("..") != -1 || path.indexOf('&') != -1) {
+            if (path.indexOf(':') >= 0 || path.indexOf("..") >= 0 || path.indexOf('&') >= 0) {
                 ctx.status(HttpStatus.BAD_REQUEST);
                 ctx.result("HTTP error code 400 (Bad request) - It's not us, it's you (Malformed request path).");
                 return;
