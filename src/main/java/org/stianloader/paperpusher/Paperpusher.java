@@ -36,7 +36,7 @@ public class Paperpusher {
     public static final String PAPERPUSHER_VERSION;
 
     @NotNull
-    public static final String COPYRIGHT_YEARS = "2023-2025";
+    public static final String COPYRIGHT_YEARS = "2023-2026";
 
     public static final Logger LOGGER = LoggerFactory.getLogger(Paperpusher.class);
 
@@ -118,6 +118,37 @@ public class Paperpusher {
         cfg.put("maven", mvnConfig);
         cfg.put("javadocs", jdConfig);
         cfg.put("search", searchConfig);
+
+        // Mirror config
+        {
+            JSONObject mirrorConfig = new JSONObject();
+            // cfg.put("mirror", mirrorConfig); // TODO enable once it's ready
+            mirrorConfig.put("mirrorRequestBindPrefix", "/mirror/");
+            mirrorConfig.put("mirrorManagementBindPrefix", "/mirrormngmt/");
+            mirrorConfig.put("storageDirectory", "mirrordata/");
+            JSONArray contentSourcesCfg = new JSONArray();
+            mirrorConfig.put("contentSources", contentSourcesCfg);
+
+            JSONObject localSource = new JSONObject();
+            contentSourcesCfg.put(localSource);
+            localSource.put("id", "local_nightlies");
+            JSONObject localProvider = new JSONObject();
+            localSource.put("provider", localProvider);
+            localProvider.put("type", "flatfile");
+            localProvider.put("path", "www/");
+            localProvider.put("genSymlink", true);
+            localSource.put("priority", -10_000); // Lower = Queried first
+
+            JSONObject remoteSource = new JSONObject();
+            contentSourcesCfg.put(remoteSource);
+            remoteSource.put("id", "stianloader_nightlies");
+            JSONObject remoteProvider = new JSONObject();
+            remoteSource.put("provider", remoteProvider);
+            remoteProvider.put("type", "uri");
+            remoteProvider.put("path", "https://stianloader.org/maven/");
+
+            remoteSource.put("priority", -5_000);
+        }
 
         try {
             Files.writeString(at, cfg.toString(2), StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW);
@@ -220,7 +251,7 @@ public class Paperpusher {
                 jdCfg = new JavadocConfiguration(Path.of(inPath), prefix, indexExclusions);
             }
 
-            return new PaperpusherConfig(bindAddress, port, maxRequestSize, mavenCfg, jdCfg, searchCfg);
+            return new PaperpusherConfig(bindAddress, port, maxRequestSize, mavenCfg, jdCfg, searchCfg, null);
         } catch (IOException | RuntimeException e) {
             Paperpusher.LOGGER.error("Unable to read configuration", e);
             return null;
