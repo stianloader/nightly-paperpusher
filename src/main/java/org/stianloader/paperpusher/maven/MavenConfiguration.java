@@ -1,6 +1,5 @@
 package org.stianloader.paperpusher.maven;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.jetbrains.annotations.NotNull;
@@ -24,24 +23,12 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
         }
         String finalPrefix = prefix;
 
-        server.get(finalPrefix + "/*/maven-metadata.xml*", (ctx) -> {
-            String getPath = ctx.path().substring(finalPrefix.length());
-            while (getPath.codePointAt(0) == '/') {
-                getPath = getPath.substring(1);
-            }
-            if (getPath.indexOf(':') >= 0 || getPath.indexOf("..") >= 0 || getPath.indexOf('&') >= 0) {
-                ctx.status(HttpStatus.BAD_REQUEST);
-                ctx.result("HTTP error code 400 (Bad request) - It's not us, it's you (Malformed request path).");
-                return;
-            }
-            Path p = publishContext.writePath.resolve(getPath);
-            if (Files.notExists(p)) {
-                ctx.status(HttpStatus.NOT_FOUND);
-            } else {
-                ctx.status(HttpStatus.OK);
-                ctx.result(Files.newInputStream(p));
-            }
-        });
+        server.get(finalPrefix + "/*.md5", new FilePublishHandler(finalPrefix, publishContext));
+        server.get(finalPrefix + "/*.sha1", new FilePublishHandler(finalPrefix, publishContext));
+        server.get(finalPrefix + "/*.sha256", new FilePublishHandler(finalPrefix, publishContext));
+        server.get(finalPrefix + "/*.sha512", new FilePublishHandler(finalPrefix, publishContext));
+
+        server.get(finalPrefix + "/*/maven-metadata.xml", new FilePublishHandler(finalPrefix, publishContext));
 
         server.put(finalPrefix + "/*", (ctx) -> {
             String path = ctx.path().substring(finalPrefix.length());
