@@ -47,7 +47,20 @@ import xmlparser.model.XmlElement;
 
 public class MavenPublishContext {
 
-    public static record GAV(@NotNull String group, @NotNull String artifact, @NotNull String version) {}
+    public static record GA(@NotNull String group, @NotNull String artifact) {}
+
+    public static record GAV(@NotNull String group, @NotNull String artifact, @NotNull String version) {
+        @NotNull
+        public GA getGA() {
+            return new GA(this.group(), this.artifact());
+        }
+
+        @NotNull
+        public String toGradleNotation() {
+            return this.group() + ":" + this.artifact() + ":" + this.version();
+        }
+    }
+
     public static record MavenArtifact(@NotNull GAV gav, @NotNull String classifier, @NotNull String type) {
 
         @NotNull
@@ -120,7 +133,7 @@ public class MavenPublishContext {
     }
 
     @Nullable
-    public static String getChecksum(byte[] nonchecksumFileContents, String algorithm) {
+    public static String getChecksum(byte @NotNull[] nonchecksumFileContents, String algorithm) {
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance(algorithm);
@@ -148,7 +161,7 @@ public class MavenPublishContext {
         try {
             Runtime.getRuntime().exec(cmd).onExit().join();
             Path ascPath = path.resolveSibling(path.getFileName() + ".asc");
-            writeChecksum(ascPath, Files.readAllBytes(ascPath));
+            MavenPublishContext.writeChecksum(ascPath, Files.readAllBytes(ascPath));
         } catch (IOException e) {
             LOGGER.error("Unable to sign file {}", path, e);
         }
@@ -349,15 +362,16 @@ public class MavenPublishContext {
 
         return parser.domToXml(project).getBytes(StandardCharsets.UTF_8);
     }
-    private static void writeChecksum(Path nonchecksumFile, byte[] nonchecksumFileContents) {
-        writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha512"), nonchecksumFileContents, "SHA-512");
-        writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha256"), nonchecksumFileContents, "SHA-256");
-        writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha1"), nonchecksumFileContents, "SHA-1");
-        writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".md5"), nonchecksumFileContents, "MD5");
+
+    private static void writeChecksum(Path nonchecksumFile, byte @NotNull[] nonchecksumFileContents) {
+        MavenPublishContext.writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha512"), nonchecksumFileContents, "SHA-512");
+        MavenPublishContext.writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha256"), nonchecksumFileContents, "SHA-256");
+        MavenPublishContext.writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".sha1"), nonchecksumFileContents, "SHA-1");
+        MavenPublishContext.writeChecksum0(nonchecksumFile.resolveSibling(nonchecksumFile.getFileName() + ".md5"), nonchecksumFileContents, "MD5");
     }
 
-    private static void writeChecksum0(Path checksumFile, byte[] nonchecksumFileContents, String algorithm) {
-        String checksum = getChecksum(nonchecksumFileContents, algorithm);
+    private static void writeChecksum0(Path checksumFile, byte @NotNull[] nonchecksumFileContents, String algorithm) {
+        String checksum = MavenPublishContext.getChecksum(nonchecksumFileContents, algorithm);
         if (checksum == null) {
             return;
         }
@@ -403,8 +417,6 @@ public class MavenPublishContext {
         }
 
         // TODO verify checksums
-
-        record GA(@NotNull String group, @NotNull String artifact) {};
 
         Map<MavenArtifact, byte @NotNull[]> artifacts = new HashMap<>();
         Map<GA, byte[]> mavenMetadata = new HashMap<>();
@@ -663,17 +675,17 @@ public class MavenPublishContext {
 
             Path parentDir = this.writePath.resolve(ga.group.replace('.', '/')).resolve(ga.artifact);
             Path path = parentDir.resolve("maven-metadata.xml");
-            LOGGER.info("Deploying to {}", path);
+            MavenPublishContext.LOGGER.info("Deploying to {}", path);
 
             try {
                 Files.createDirectories(parentDir);
                 Files.write(path, entry.getValue(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                writeChecksum(path, entry.getValue());
+                MavenPublishContext.writeChecksum(path, Objects.requireNonNull(entry.getValue()));
                 if (this.signCmd != null) {
-                    sign(path, this.signCmd);
+                    MavenPublishContext.sign(path, this.signCmd);
                 }
             } catch (IOException e) {
-                LOGGER.error("Unable to deploy to {}", path, e);
+                MavenPublishContext.LOGGER.error("Unable to deploy to {}", path, e);
             }
 
             return true;

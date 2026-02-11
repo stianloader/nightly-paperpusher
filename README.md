@@ -22,6 +22,13 @@ If you absolutely need to expose that part of the repository publicly, please
 create an issue on this repository beforehand and use a reverse-proxy
 that performs the necessary AAA.
 
+The discord webhook is the only security measure to detect unauthorized
+deployments, so please be careful. And also trust your host with your
+heart. They can easily exploit the vulnerabilities present in this
+application. However, if your host is compromised then you are SOL
+anyways, so you have more things to worry about in this case. Nonetheless
+this happens, see the Notepad++ intrusion in late 2025.
+
 ## Notable features
 
 Besides being something that stores maven artifacts to disk, nightly-paperpusher has
@@ -31,6 +38,7 @@ following notable features:
 - Javadocs can easily be obtained via an endpoint
 - Keeps track of when methods, fields, classes, and packages are added and removed
 - This application is developed to be run using graal native-image first and foremost
+- Send a discord webhook message when deploying artifacts
 
 ## Endpoints
 
@@ -56,6 +64,9 @@ you still need to make use of a different webserver to serve the webpages.
 Note: When pushing artifacts to this endpoint they will only get "staged",
 but won't be committed to disk until the `<maven-bind-prefix>/commit` endpoint
 is called. I.e. by default it would be `/maven/commit`.
+
+This endpoint also allows to post a discord webhook message when committing
+to disk, 
 
 ### Javadoc endpoint
 

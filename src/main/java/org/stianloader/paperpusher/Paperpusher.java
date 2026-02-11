@@ -106,6 +106,7 @@ public class Paperpusher {
         mvnConfig.put("prefix", "/maven/");
         mvnConfig.put("signCmd", "");
         mvnConfig.put("outputPath", "www/");
+        mvnConfig.put("webhookURL", JSONObject.NULL);
         JSONObject searchConfig = new JSONObject();
         searchConfig.put("prefix", "/search/");
         searchConfig.put("repositoryId", "paperpusher_repo");
@@ -178,8 +179,9 @@ public class Paperpusher {
                 String prefix = maven.getString("prefix");
                 String outPath = maven.getString("outputPath");
                 String signCmd = maven.getString("signCmd");
+                String webhookURL = maven.getString("webhookURL");
 
-                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix);
+                mavenCfg = new MavenConfiguration(signCmd, Path.of(outPath), prefix, webhookURL);
             }
 
             SearchConfiguration searchCfg;
