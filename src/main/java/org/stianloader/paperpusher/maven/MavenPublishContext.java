@@ -1,8 +1,9 @@
 package org.stianloader.paperpusher.maven;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,6 +33,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.stianloader.paperpusher.maven.InputStreamProvider.ByteArrayInputStreamProvider;
 
 import software.coley.cafedude.InvalidClassException;
 import software.coley.cafedude.classfile.ClassFile;
@@ -163,12 +165,12 @@ public class MavenPublishContext {
             Path ascPath = path.resolveSibling(path.getFileName() + ".asc");
             MavenPublishContext.writeChecksum(ascPath, Files.readAllBytes(ascPath));
         } catch (IOException e) {
-            LOGGER.error("Unable to sign file {}", path, e);
+            MavenPublishContext.LOGGER.error("Unable to sign file {}", path, e);
         }
     }
 
-    private static byte[] updateGradleModule(Map<GAV, String> mappedVersions, Map<MavenArtifact, byte[]> mappedArtifacts, byte[] transformedData) {
-        JSONObject gradleModule = new JSONObject(new String(transformedData, StandardCharsets.UTF_8));
+    private static byte @Nullable [] updateGradleModule(Map<GAV, String> mappedVersions, Map<MavenArtifact, @NotNull StagedResource> mappedArtifacts, @NotNull StagedResource transformedData) {
+        JSONObject gradleModule = new JSONObject(new String(transformedData.getAsBytes(), StandardCharsets.UTF_8));
         JSONObject component = gradleModule.getJSONObject("component");
         String group = component.getString("group");
         String artifact = component.getString("module");
@@ -191,12 +193,12 @@ public class MavenPublishContext {
                 String fileurl = file.getString("url");
 
                 if (!filename.equals(fileurl)) {
-                    LOGGER.warn("File URL '{}' mismatches file name '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, filename, group, artifact, oldVersion, variant.optString("name"));
+                    MavenPublishContext.LOGGER.warn("File URL '{}' mismatches file name '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, filename, group, artifact, oldVersion, variant.optString("name"));
                     continue;
                 }
 
                 if (!filename.startsWith(artifact + '-' + oldVersion)) {
-                    LOGGER.warn("File URL '{}' has unexpected prefix in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, group, artifact, oldVersion, variant.optString("name"));
+                    MavenPublishContext.LOGGER.warn("File URL '{}' has unexpected prefix in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, group, artifact, oldVersion, variant.optString("name"));
                     continue;
                 }
 
@@ -208,7 +210,7 @@ public class MavenPublishContext {
                 if (suffix.codePointAt(0) == '-') {
                     int indexofDot = suffix.indexOf('.');
                     if (indexofDot == -1) {
-                        LOGGER.warn("File URL '{}' has classifier-style suffix without dot '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, suffix, group, artifact, oldVersion, variant.optString("name"));
+                        MavenPublishContext.LOGGER.warn("File URL '{}' has classifier-style suffix without dot '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, suffix, group, artifact, oldVersion, variant.optString("name"));
                         continue;
                     }
                     classifier = suffix.substring(1, indexofDot);
@@ -217,7 +219,7 @@ public class MavenPublishContext {
                     type = suffix.substring(1);
                     classifier = "";
                 } else {
-                    LOGGER.warn("File URL '{}' has unexpected suffix start '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, suffix, group, artifact, oldVersion, variant.optString("name"));
+                    MavenPublishContext.LOGGER.warn("File URL '{}' has unexpected suffix start '{}' in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, suffix, group, artifact, oldVersion, variant.optString("name"));
                     continue;
                 }
 
@@ -225,10 +227,10 @@ public class MavenPublishContext {
                 String mappedVersion = Objects.requireNonNull(mappedVersions.getOrDefault(oldGAV, oldVersion));
                 String mappedName = artifact + '-' + mappedVersion;
                 MavenArtifact fileArtifact = new MavenArtifact(new GAV(group, artifact, mappedVersion), classifier, type);
-                byte[] fileData = mappedArtifacts.get(fileArtifact);
+                StagedResource fileData = mappedArtifacts.get(fileArtifact);
 
-                if (fileData == null) {
-                    LOGGER.warn("File URL '{}' inferrs file artifact '{}' which is not known in the publication context in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, fileArtifact, group, artifact, oldVersion, variant.optString("name"));
+                if (Objects.isNull(fileData)) {
+                    MavenPublishContext.LOGGER.warn("File URL '{}' inferrs file artifact '{}' which is not known in the publication context in gradle module of artifact '{}'/'{}'@'{}' inside variant '{}'; skipping file entry", fileurl, fileArtifact, group, artifact, oldVersion, variant.optString("name"));
                     continue;
                 }
 
@@ -238,13 +240,15 @@ public class MavenPublishContext {
 
                 mappedName += '.' + type;
 
+                byte[] rawData = fileData.getAsBytes();
+
                 file.put("name", mappedName);
                 file.put("url", mappedName);
-                file.put("size", fileData.length);
-                file.put("sha512", getChecksum(fileData, "SHA-512"));
-                file.put("sha256", getChecksum(fileData, "SHA-256"));
-                file.put("sha1", getChecksum(fileData, "SHA-1"));
-                file.put("md5", getChecksum(fileData, "MD5"));
+                file.put("size", rawData.length);
+                file.put("sha512", MavenPublishContext.getChecksum(rawData, "SHA-512"));
+                file.put("sha256", MavenPublishContext.getChecksum(rawData, "SHA-256"));
+                file.put("sha1", MavenPublishContext.getChecksum(rawData, "SHA-1"));
+                file.put("md5", MavenPublishContext.getChecksum(rawData, "MD5"));
             }
 
             if (dependencies != null) {
@@ -277,13 +281,13 @@ public class MavenPublishContext {
         return transformedModuleDataString.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static final byte @Nullable[] updateMavenMetadata(Map<GAV, String> mappedVersions, byte[] originData) {
+    private static final byte @Nullable[] updateMavenMetadata(Map<GAV, String> mappedVersions, @NotNull StagedResource originData) {
         XmlElement metadata;
         XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
-        try {
-            metadata = parser.fromXml(new ByteArrayInputStream(originData));
+        try (InputStream in = originData.openStream()) {
+            metadata = parser.fromXml(in);
         } catch (InvalidXml | IOException e) {
-            LOGGER.error("Unable to update A-level maven metadata file", e);
+            MavenPublishContext.LOGGER.error("Unable to update A-level maven metadata file", e);
             return null;
         }
 
@@ -320,13 +324,14 @@ public class MavenPublishContext {
         return parser.domToXml(metadata).getBytes(StandardCharsets.UTF_8);
     }
 
-    private static final byte @Nullable[] updatePOM(Map<GAV, String> mappedVersions, byte[] originData, GAV originGAV) {
+    private static final byte @Nullable[] updatePOM(Map<GAV, String> mappedVersions, @NotNull InputStreamProvider originData, @NotNull GAV originGAV) {
         XmlElement project;
         XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
-        try {
-            project = parser.fromXml(new ByteArrayInputStream(originData));
+
+        try (InputStream in = originData.openStream()) {
+            project = parser.fromXml(in);
         } catch (IOException | InvalidXml e) {
-            LOGGER.error("Unable to readdress POM: Parser reading exception", e);
+            MavenPublishContext.LOGGER.error("Unable to readdress POM: Parser reading exception", e);
             return null;
         }
 
@@ -357,7 +362,7 @@ public class MavenPublishContext {
         }
 
         if (mappedVersions.containsKey(originGAV) && !XMLUtil.updateValue(project, "version", mappedVersions.get(originGAV))) {
-            LOGGER.warn("Unable to update version of POM {}?", originGAV);
+            MavenPublishContext.LOGGER.warn("Unable to update version of POM {}?", originGAV);
         }
 
         return parser.domToXml(project).getBytes(StandardCharsets.UTF_8);
@@ -387,13 +392,17 @@ public class MavenPublishContext {
     private long lastStage = -1;
 
     @NotNull
-    private final List<@NotNull Consumer<@NotNull Map<MavenArtifact, byte @NotNull[]>>> publishListener = new ArrayList<>();
+    private final List<@NotNull Consumer<@NotNull Map<MavenArtifact, @NotNull StagedResource>>> publishListener = new ArrayList<>();
 
     @Nullable
     public final String signCmd;
 
-    public final Map<String, byte @NotNull[]> staged = new ConcurrentHashMap<>();
+    public final Map<String, @NotNull StagedResource> staged = new ConcurrentHashMap<>();
 
+    @NotNull
+    private final Path tempStagingPath;
+
+    @NotNull
     public final Path writePath;
 
     public MavenPublishContext(Path writePath, String signCmd) {
@@ -403,30 +412,38 @@ public class MavenPublishContext {
         } else {
             this.signCmd = signCmd;
         }
+
+        try {
+            this.tempStagingPath = Files.createTempDirectory("paperpusher-staging");
+        } catch (IOException e) {
+            throw new UncheckedIOException("Unable to create temporary path for staging resources", e);
+        }
     }
 
-    public void addPublicationListener(@NotNull Consumer<@NotNull Map<MavenArtifact, byte @NotNull[]>> listener) {
+    public void addPublicationListener(@NotNull Consumer<@NotNull Map<MavenArtifact, @NotNull StagedResource>> listener) {
         this.publishListener.add(listener);
     }
 
     public void commit() {
-        Map<String, byte @NotNull[]> committed;
-        synchronized (this) {
+        Map<String, @NotNull StagedResource> committed;
+
+        synchronized (this.staged) {
             committed = new HashMap<>(this.staged);
             this.staged.clear();
         }
 
         // TODO verify checksums
 
-        Map<MavenArtifact, byte @NotNull[]> artifacts = new HashMap<>();
-        Map<GA, byte[]> mavenMetadata = new HashMap<>();
+        Map<MavenArtifact, @NotNull StagedResource> artifacts = new HashMap<>();
+        Map<GA, @NotNull StagedResource> mavenMetadata = new HashMap<>();
 
-        for (Map.Entry<String, byte @NotNull[]> f : committed.entrySet()) {
+        for (Map.Entry<String, @NotNull StagedResource> f : committed.entrySet()) {
             String path = f.getKey();
 
             if (path.endsWith(".sha1") || path.endsWith(".md5") || path.endsWith(".sha256") || path.endsWith(".sha512")) {
                 // Ignore checksums - they were processed beforehand; Now they would be useless weight as the artifacts are going
                 // to be changed anyways
+                f.getValue().closeUnchecked();
                 continue;
             }
 
@@ -441,8 +458,9 @@ public class MavenPublishContext {
             int penPenultimateSlash = path.lastIndexOf('/', penultimateSlash - 1);
 
             if (penPenultimateSlash == -1) {
-                LOGGER.error("Cannot find pen-pen-ultimate slash ({}, {}) for path '{}'; skipping entry", lastSlash, penultimateSlash, path);
+                MavenPublishContext.LOGGER.error("Cannot find pen-pen-ultimate slash ({}, {}) for path '{}'; skipping entry", lastSlash, penultimateSlash, path);
 //                LOGGER.info("Data as text:\n{}", new String(f.getValue(), StandardCharsets.UTF_8));
+                f.getValue().closeUnchecked();
                 continue;
             }
 
@@ -452,6 +470,10 @@ public class MavenPublishContext {
             String groupId = path.substring(0, penPenultimateSlash).replace('/', '.');
 
             if (groupId.codePointAt(0) == '.') {
+                for (StagedResource resource : committed.values()) {
+                    resource.closeUnchecked();
+                }
+
                 throw new AssertionError("Illegal start of groupd ID!");
             }
 
@@ -462,7 +484,8 @@ public class MavenPublishContext {
                 String classifier = "";
                 int indexofdot = affix.indexOf('.');
                 if (indexofdot == -1) {
-                    LOGGER.warn("Affix '{}' of path '{}' from filename '{}' does not contain a dot?", affix, path, filename);
+                    MavenPublishContext.LOGGER.warn("Affix '{}' of path '{}' from filename '{}' does not contain a dot?", affix, path, filename);
+                    f.getValue().closeUnchecked();
                     continue;
                 }
                 if (affix.codePointAt(0) == '-') {
@@ -470,13 +493,15 @@ public class MavenPublishContext {
                     affix = affix.substring(indexofdot);
                 }
                 if (affix.codePointAt(0) != '.') {
-                    LOGGER.warn("Affix '{}' of path '{}' from filename '{}' does not start with a dot after cutting off the classifier", affix, path, filename);
+                    MavenPublishContext.LOGGER.warn("Affix '{}' of path '{}' from filename '{}' does not start with a dot after cutting off the classifier", affix, path, filename);
+                    f.getValue().closeUnchecked();
                     continue;
                 }
                 artifacts.put(new MavenArtifact(gav, classifier, affix.substring(1)), f.getValue());
             } else {
                 // Discard
-                LOGGER.info("Discarding commited file {} as the name does not contain the expected GAV parameters {}.", filename, gav);
+                MavenPublishContext.LOGGER.info("Discarding commited file {} as the name does not contain the expected GAV parameters {}.", filename, gav);
+                f.getValue().closeUnchecked();
                 continue;
             }
         }
@@ -495,19 +520,21 @@ public class MavenPublishContext {
                 mappedVersions.putIfAbsent(originGAV, mapped);
             });
 
-        Map<MavenArtifact, byte @NotNull[]> readdressedArtifacts = new HashMap<>();
+        Map<MavenArtifact, @NotNull StagedResource> readdressedArtifacts = new HashMap<>();
+
         artifacts.entrySet().removeIf((entry) -> {
             final MavenArtifact artifact = entry.getKey();
-            final byte[] originData = entry.getValue();
+            @NotNull
+            final StagedResource originData = entry.getValue();
             final GAV originGAV = artifact.gav;
-
-            byte @NotNull[] transformedData = originData;
+            @NotNull
+            StagedResource transformedData = originData;
             GAV transformedGAV = new GAV(originGAV.group, originGAV.artifact, Objects.requireNonNull(mappedVersions.getOrDefault(originGAV, originGAV.version)));
 
             if (artifact.type.equals("jar")) {
                 try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                        ByteArrayInputStream bais = new ByteArrayInputStream(transformedData);
-                        ZipInputStream zipIn = new ZipInputStream(bais, StandardCharsets.UTF_8);
+                        InputStream rawIn = transformedData.openStream();
+                        ZipInputStream zipIn = new ZipInputStream(rawIn, StandardCharsets.UTF_8);
                         ZipOutputStream zipOut = new ZipOutputStream(baos, StandardCharsets.UTF_8)) {
                     for (ZipEntry zipEntry = zipIn.getNextEntry(); zipEntry != null; zipEntry = zipIn.getNextEntry()) {
                         zipOut.putNextEntry(new ZipEntry(zipEntry.getName()));
@@ -543,7 +570,7 @@ public class MavenPublishContext {
                             // shading is becoming more and more frowned upon, so we might as well consider that
                             // to be a non-priority
                             byte[] fullData = zipIn.readAllBytes();
-                            byte[] mapped = MavenPublishContext.updatePOM(mappedVersions, fullData, originGAV);
+                            byte[] mapped = MavenPublishContext.updatePOM(mappedVersions, new ByteArrayInputStreamProvider(fullData), originGAV);
                             if (mapped == null) {
                                 zipOut.write(fullData);
                             } else {
@@ -587,15 +614,16 @@ public class MavenPublishContext {
 
                     zipOut.flush();
                     zipOut.close();
-                    transformedData = baos.toByteArray();
+                    transformedData.close();
+                    transformedData = StagedResource.writeToDisk(this.tempStagingPath, baos.toByteArray());
                 } catch (IOException e) {
-                    LOGGER.error("Unable to readdress jar {}; using original jar contents instead", artifact, e);
-                    transformedData = originData;
+                    MavenPublishContext.LOGGER.error("Unable to readdress jar {}; using original jar contents instead", artifact, e);
                 }
             } else if (artifact.type.equals("pom")) {
-                byte[] transformed = updatePOM(mappedVersions, transformedData, artifact.gav);
+                byte[] transformed = MavenPublishContext.updatePOM(mappedVersions, transformedData, artifact.gav);
                 if (transformed != null) {
-                    transformedData = transformed;
+                    transformedData.closeUnchecked();
+                    transformedData = StagedResource.writeToDisk(this.tempStagingPath, transformed);
                 }
             } else if (artifact.type.equals("module")) {
                 // Needs to be filtered later on to know the fate of all other artifacts (useful for SHA checksums)
@@ -608,10 +636,12 @@ public class MavenPublishContext {
 
         artifacts.entrySet().removeIf((entry) -> {
             if (entry.getKey().type.equals("module")) {
-                byte[] data = entry.getValue();
-                byte[] transformed = updateGradleModule(mappedVersions, readdressedArtifacts, data);
+                StagedResource data = entry.getValue();
+                byte[] transformed = MavenPublishContext.updateGradleModule(mappedVersions, readdressedArtifacts, data);
+
                 if (transformed != null) {
-                    data = transformed;
+                    data.closeUnchecked();
+                    data = StagedResource.writeToDisk(this.tempStagingPath, transformed);
                 }
 
                 MavenArtifact originArtifact = entry.getKey();
@@ -621,20 +651,24 @@ public class MavenPublishContext {
                 return true;
             }
 
-            LOGGER.warn("Unmapped artifact {} went unfiltered!", entry.getKey());
+            MavenPublishContext.LOGGER.warn("Unmapped artifact {} went unfiltered!", entry.getKey());
+            entry.getValue().closeUnchecked();
             return false;
         });
 
-        Map<GA, byte[]> readdressedMetadata = new HashMap<>();
+        Map<GA, @NotNull StagedResource> readdressedMetadata = new HashMap<>();
 
         mavenMetadata.entrySet().removeIf(entry -> {
-            byte[] originData = entry.getValue();
-            GA ga = entry.getKey();
-            byte[] mappedMeta = updateMavenMetadata(mappedVersions, originData);
-            if (mappedMeta == null) {
-                mappedMeta = originData;
+            StagedResource resource = entry.getValue();
+
+            byte[] mappedMetaRaw = MavenPublishContext.updateMavenMetadata(mappedVersions, resource);
+
+            if (mappedMetaRaw != null) {
+                resource.closeUnchecked();
+                resource = StagedResource.writeToDisk(this.tempStagingPath, mappedMetaRaw);
             }
-            readdressedMetadata.put(ga, mappedMeta);
+
+            readdressedMetadata.put(entry.getKey(), resource);
             return true;
         });
 
@@ -650,21 +684,23 @@ public class MavenPublishContext {
             Path path = parentDir.resolve(gav.artifact + '-' + gav.version + (artifact.classifier.isBlank() ? "" : "-" + artifact.classifier) + '.' + artifact.type);
 
             if (Files.exists(path)) {
-                LOGGER.error("Attempted to overwrite file at path {}; skipping!", path);
+                MavenPublishContext.LOGGER.error("Attempted to overwrite file at path {}; skipping!", path);
                 return true;
             }
 
-            LOGGER.info("Deploying to {}", path);
+            MavenPublishContext.LOGGER.info("Deploying to {}", path);
 
             try {
+                byte[] data = entry.getValue().getAsBytes();
+                entry.getValue().close();
                 Files.createDirectories(parentDir);
-                Files.write(path, entry.getValue(), StandardOpenOption.CREATE_NEW);
-                writeChecksum(path, entry.getValue());
+                Files.write(path, data, StandardOpenOption.CREATE_NEW);
+                MavenPublishContext.writeChecksum(path, data);
                 if (this.signCmd != null) {
-                    sign(path, this.signCmd);
+                    MavenPublishContext.sign(path, this.signCmd);
                 }
             } catch (IOException e) {
-                LOGGER.error("Unable to deploy to {}", path, e);
+                MavenPublishContext.LOGGER.error("Unable to deploy to {}", path, e);
             }
 
             return true;
@@ -678,9 +714,11 @@ public class MavenPublishContext {
             MavenPublishContext.LOGGER.info("Deploying to {}", path);
 
             try {
+                byte[] data = entry.getValue().getAsBytes();
+                entry.getValue().close();
                 Files.createDirectories(parentDir);
-                Files.write(path, entry.getValue(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-                MavenPublishContext.writeChecksum(path, Objects.requireNonNull(entry.getValue()));
+                Files.write(path, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+                MavenPublishContext.writeChecksum(path, data);
                 if (this.signCmd != null) {
                     MavenPublishContext.sign(path, this.signCmd);
                 }
@@ -692,20 +730,30 @@ public class MavenPublishContext {
         });
     }
 
-    public void stage(String path, byte @NotNull[] data) {
+    public void stage(String path, byte @NotNull[] data) throws IOException {
         if (path.endsWith(".asc")) {
             // Ignore ASC signature files generated by PGP (we would need to sign the files ourselves, sigh...)
             return;
         }
         synchronized (this) {
-            if ((System.currentTimeMillis() - this.lastStage) > MavenPublishContext.STAGE_TIMEOUT && !this.staged.isEmpty()) {
-                LoggerFactory.getLogger(MavenPublishContext.class).warn("Discarding staged files as the staging timeout has been reached. Waited {}ms between staging requests even though a timeout of " + STAGE_TIMEOUT + "ms exists.", System.currentTimeMillis() - this.lastStage);
-                this.staged.clear();
+            synchronized (this.staged) {
+                if ((System.currentTimeMillis() - this.lastStage) > MavenPublishContext.STAGE_TIMEOUT && !this.staged.isEmpty()) {
+                    LoggerFactory.getLogger(MavenPublishContext.class).warn("Discarding staged files as the staging timeout has been reached. Waited {}ms between staging requests even though a timeout of " + MavenPublishContext.STAGE_TIMEOUT + "ms exists.", System.currentTimeMillis() - this.lastStage);
+
+                    for (StagedResource resource : this.staged.values()) {
+                        resource.close();
+                    }
+
+                    this.staged.clear();
+                }
             }
+
             if (path.codePointAt(0) == '/') {
                 path = path.substring(1);
             }
-            this.staged.put(path, data);
+
+            this.staged.put(path, StagedResource.writeToDisk(this.tempStagingPath, data));
+
             this.lastStage = System.currentTimeMillis();
         }
     }

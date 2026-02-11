@@ -1,7 +1,7 @@
 package org.stianloader.paperpusher.search;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
@@ -49,6 +49,7 @@ import org.stianloader.paperpusher.maven.MavenPublishContext;
 import org.stianloader.paperpusher.maven.MavenPublishContext.GAV;
 import org.stianloader.paperpusher.maven.MavenPublishContext.MavenArtifact;
 import org.stianloader.paperpusher.maven.NonTextXMLIterable;
+import org.stianloader.paperpusher.maven.StagedResource;
 import org.stianloader.paperpusher.maven.XMLUtil;
 import org.stianloader.paperpusher.search.DeltaDB.ChangeType;
 import org.stianloader.paperpusher.search.DeltaDB.ProtoClassDelta;
@@ -854,7 +855,7 @@ public class SearchContext {
         return Objects.requireNonNull(records.iterator());
     }
 
-    private synchronized void updateDeltaDB(@NotNull Map<MavenArtifact, byte @NotNull[]> addedArtifacts) {
+    private synchronized void updateDeltaDB(@NotNull Map<MavenArtifact, @NotNull StagedResource> addedArtifacts) {
         if (this.aborted) {
             return;
         }
@@ -863,13 +864,14 @@ public class SearchContext {
 
         ClassFileReader classReader = new ClassFileReader();
         artifactLoop:
-        for (Map.Entry<MavenArtifact, byte @NotNull[]> entry : addedArtifacts.entrySet()) {
+        for (Map.Entry<MavenArtifact, StagedResource> entry : addedArtifacts.entrySet()) {
             MavenArtifact artifactLocation = entry.getKey();
-            byte[] artifactContent = entry.getValue();
 
             if (!artifactLocation.type().equals("jar") || !artifactLocation.classifier().equals("")) {
                 continue artifactLoop;
             }
+
+            byte[] artifactContent = entry.getValue().getAsBytes();
 
             try {
                 this.searchDatabaseConnection.setAutoCommit(false);
@@ -916,9 +918,6 @@ public class SearchContext {
 
                     String previousVersion = latest.getKey().getOriginText();
                     GAV gav = entry.getKey().gav();
-                    if (previousVersion == null) {
-                        throw new NullPointerException("MavenVersion#getOriginText returned null!");
-                    }
                     Path previousJar = this.config.repositoryPath().resolve(gav.group().replace('.', '/')).resolve(gav.artifact()).resolve(previousVersion).resolve(gav.artifact() + "-" + previousVersion + ".jar");
 
                     if (Files.notExists(previousJar)) {
@@ -1179,7 +1178,7 @@ public class SearchContext {
         SearchContext.LOGGER.info("Delta database updated ({}ms)", System.currentTimeMillis() - timestamp);
     }
 
-    private synchronized void updateMavenIndex(@NotNull Map<MavenArtifact, byte[]> addedArtifacts) {
+    private synchronized void updateMavenIndex(@NotNull Map<MavenArtifact, @NotNull StagedResource> addedArtifacts) {
         if (this.aborted) {
             return;
         }
@@ -1208,17 +1207,16 @@ public class SearchContext {
         Map<GAV, POMDetails> poms = new HashMap<>();
 
         XmlParser parser = XmlParser.newXmlParser().charset(StandardCharsets.UTF_8).build();
-        for (Map.Entry<MavenArtifact, byte[]> entry : addedArtifacts.entrySet()) {
+        for (Map.Entry<MavenArtifact, StagedResource> entry : addedArtifacts.entrySet()) {
             MavenArtifact addedArtifact = entry.getKey();
 
             if (!addedArtifact.classifier().isEmpty() || !addedArtifact.type().equals("pom")) {
                 continue;
             }
 
-            byte[] artifactContents = entry.getValue();
             XmlElement pomElement;
-            try {
-                pomElement = parser.fromXml(new ByteArrayInputStream(artifactContents));
+            try (InputStream is = entry.getValue().openStream()) {
+                pomElement = parser.fromXml(is);
             } catch (IOException | InvalidXml e) {
                 SearchContext.LOGGER.error("Unable to parse artifact POM {}. Skipping...", addedArtifact, e);
                 continue;
@@ -1231,9 +1229,9 @@ public class SearchContext {
             poms.put(addedArtifact.gav(), new POMDetails(packaging, name, description));
         }
 
-        for (Map.Entry<MavenArtifact, byte[]> entry : addedArtifacts.entrySet()) {
+        for (Map.Entry<MavenArtifact, StagedResource> entry : addedArtifacts.entrySet()) {
             MavenArtifact addedArtifact = entry.getKey();
-            byte[] artifactContents = entry.getValue();
+            byte[] artifactContents = entry.getValue().getAsBytes();
 
             Map<EntryKey, Object> expanded = new HashMap<>();
 

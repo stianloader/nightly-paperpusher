@@ -49,25 +49,30 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
         server.put(finalPrefix + "/*", (ctx) -> {
             String path = ctx.path().substring(finalPrefix.length());
             MavenConfiguration.LOGGER.info("Recieved data from {} ({}) at path '{}'", ctx.ip(), ctx.userAgent(), path);
+
             while (path.indexOf(0) == '/') {
                 path = path.substring(1);
             }
+
             if (path.indexOf(':') >= 0 || path.indexOf("..") >= 0 || path.indexOf('&') >= 0) {
                 ctx.status(HttpStatus.BAD_REQUEST);
                 ctx.result("HTTP error code 400 (Bad request) - It's not us, it's you (Malformed request path).");
                 return;
             }
+
             publishContext.stage(path, ctx.bodyAsBytes());
             ctx.status(HttpStatus.OK);
         });
 
         server.get(finalPrefix + "/commit", (ctx) -> {
-            if (publishContext.staged.isEmpty()) {
-                ctx.result("NOTHING STAGED");
-                ctx.status(HttpStatus.TOO_MANY_REQUESTS);
-                return;
+            synchronized (publishContext.staged) {
+                if (publishContext.staged.isEmpty()) {
+                    ctx.result("NOTHING STAGED");
+                    ctx.status(HttpStatus.TOO_MANY_REQUESTS);
+                    return;
+                }
+                publishContext.commit();
             }
-            publishContext.commit();
             ctx.result("OK");
             ctx.status(HttpStatus.OK);
         });
@@ -77,7 +82,7 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
         if (webhookURL != null) {
             publishContext.addPublicationListener((publishedArtifacts) -> {
                 long startTime = System.nanoTime();
-                long bytesCount = publishedArtifacts.values().stream().mapToLong(x -> x.length).sum();
+                long bytesCount = publishedArtifacts.values().stream().mapToLong(StagedResource::getLength).sum();
                 int exponent = 0;
                 double value = bytesCount;
                 final String[] prefixes = { "", "Ki", "Mi", "Gi", "Ti" };
