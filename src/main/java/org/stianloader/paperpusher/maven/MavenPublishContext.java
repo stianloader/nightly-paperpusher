@@ -576,7 +576,7 @@ public class MavenPublishContext {
                             } else {
                                 zipOut.write(mapped);
                             }
-                        } else if (zipEntry.getName().endsWith("/module-info.class")) {
+                        } else if (zipEntry.getName().endsWith("/module-info.class") || zipEntry.getName().equals("module-info.class")) {
                             byte[] originalData = zipIn.readAllBytes();
                             try {
                                 ClassFile file = new ClassFileReader().read(originalData);
