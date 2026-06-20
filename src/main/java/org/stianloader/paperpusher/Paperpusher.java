@@ -28,6 +28,8 @@ import org.stianloader.paperpusher.search.SearchContext.SearchConfiguration;
 import org.stianloader.picoresolve.version.VersionRange;
 
 import io.javalin.Javalin;
+import io.javalin.compression.CompressionStrategy;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpStatus;
 
 public class Paperpusher {
@@ -39,6 +41,45 @@ public class Paperpusher {
     public static final String COPYRIGHT_YEARS = "2023-2026";
 
     public static final Logger LOGGER = LoggerFactory.getLogger(Paperpusher.class);
+
+    private static void start(@NotNull PaperpusherConfig cfg, @NotNull RoutesConfig routes) {
+        MavenConfiguration mvnConfig = cfg.maven();
+
+        if (mvnConfig != null) {
+            MavenPublishContext mavenContext = mvnConfig.attach(routes);
+            SearchConfiguration searchCfg = cfg.search();
+
+            if (searchCfg != null) {
+                new SearchContext(searchCfg).attach(routes, mavenContext);
+            }
+        } else if (cfg.search() != null) {
+            Paperpusher.LOGGER.error("Unsupported/Unexpected configuration state: Search configuration != null even though maven configuration == null.");
+        }
+
+        JavadocConfiguration jdConfig = cfg.javadoc();
+
+        if (jdConfig != null) {
+            if (mvnConfig != null && (mvnConfig.mavenBindPrefix().equals("") || mvnConfig.mavenBindPrefix().equals("/"))) {
+                throw new IllegalStateException("Maven configured to listen to root path while javadocs are enabled. Halting server in order to avoid unintended negative synergies.");
+            }
+
+            jdConfig.attach(routes);
+        }
+
+        routes.get("/getpid", (ctx) -> {
+            ctx.result(Long.toUnsignedString(ProcessHandle.current().pid()));
+            ctx.status(HttpStatus.OK);
+        });
+
+        routes.get("/killdaemon", (ctx) -> {
+            ctx.result("OK");
+            ctx.status(HttpStatus.OK);
+
+            ForkJoinPool.commonPool().submit(() -> {
+                System.exit(0);
+            });
+        });
+    }
 
     public static void main(String[] args) {
         Path configurationPath = Path.of("config.json");
@@ -60,39 +101,9 @@ public class Paperpusher {
         Javalin javalinServer = Javalin.create((serverConf) -> {
             serverConf.http.prefer405over404 = true;
             serverConf.http.maxRequestSize = cfg.maxRequestSize();
-            serverConf.useVirtualThreads = false; // Note: GraalVM 22 + Native-Image + Javalin 6.1.3 do not support virtual threads.
-        });
+            serverConf.concurrency.useVirtualThreads = true;
 
-        MavenConfiguration mvnConfig = cfg.maven();
-        if (mvnConfig != null) {
-            MavenPublishContext mavenContext = mvnConfig.attach(javalinServer);
-            SearchConfiguration searchCfg = cfg.search();
-            if (searchCfg != null) {
-                new SearchContext(searchCfg).attach(javalinServer, mavenContext);
-            }
-        } else if (cfg.search() != null) {
-            Paperpusher.LOGGER.error("Unsupported/Unexpected configuration state: Search configuration != null even though maven configuration == null.");
-        }
-
-        JavadocConfiguration jdConfig = cfg.javadoc();
-        if (jdConfig != null) {
-            if (mvnConfig != null && (mvnConfig.mavenBindPrefix().equals("") || mvnConfig.mavenBindPrefix().equals("/"))) {
-                throw new IllegalStateException("Maven configured to listen to root path while javadocs are enabled. Halting server in order to avoid unintended negative synergies.");
-            }
-            jdConfig.attach(javalinServer);
-        }
-
-        javalinServer.get("/getpid", (ctx) -> {
-            ctx.result(Long.toUnsignedString(ProcessHandle.current().pid()));
-            ctx.status(HttpStatus.OK);
-        });
-
-        javalinServer.get("/killdaemon", (ctx) -> {
-            ctx.result("OK");
-            ctx.status(HttpStatus.OK);
-            ForkJoinPool.commonPool().submit(() -> {
-                System.exit(0);
-            });
+            Paperpusher.start(cfg, Objects.requireNonNull(serverConf.routes, "JavalinConfig#routes is null"));
         });
 
         javalinServer.start(cfg.bindHost(), cfg.port());

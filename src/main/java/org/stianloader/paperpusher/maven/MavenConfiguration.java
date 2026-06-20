@@ -22,7 +22,7 @@ import org.stianloader.paperpusher.maven.MavenPublishContext.GA;
 import org.stianloader.paperpusher.maven.MavenPublishContext.GAV;
 import org.stianloader.paperpusher.maven.MavenPublishContext.MavenArtifact;
 
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpStatus;
 
 public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, String mavenBindPrefix, @Nullable String webhookURL) {
@@ -30,23 +30,25 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
     private static final Logger LOGGER = LoggerFactory.getLogger(MavenConfiguration.class);
 
     @NotNull
-    public MavenPublishContext attach(Javalin server) {
+    public MavenPublishContext attach(@NotNull RoutesConfig routes) {
         MavenPublishContext publishContext = new MavenPublishContext(this.mavenOutputPath(), this.signCmd());
 
         String prefix = this.mavenBindPrefix;
+
         if (prefix.codePointBefore(prefix.length()) == '/') {
             prefix = prefix.substring(0, prefix.length() - 1);
         }
+
         String finalPrefix = prefix;
 
-        server.get(finalPrefix + "/*.md5", new FilePublishHandler(finalPrefix, publishContext));
-        server.get(finalPrefix + "/*.sha1", new FilePublishHandler(finalPrefix, publishContext));
-        server.get(finalPrefix + "/*.sha256", new FilePublishHandler(finalPrefix, publishContext));
-        server.get(finalPrefix + "/*.sha512", new FilePublishHandler(finalPrefix, publishContext));
+        routes.get(finalPrefix + "/*.md5", new FilePublishHandler(finalPrefix, publishContext));
+        routes.get(finalPrefix + "/*.sha1", new FilePublishHandler(finalPrefix, publishContext));
+        routes.get(finalPrefix + "/*.sha256", new FilePublishHandler(finalPrefix, publishContext));
+        routes.get(finalPrefix + "/*.sha512", new FilePublishHandler(finalPrefix, publishContext));
 
-        server.get(finalPrefix + "/*/maven-metadata.xml", new FilePublishHandler(finalPrefix, publishContext));
+        routes.get(finalPrefix + "/*/maven-metadata.xml", new FilePublishHandler(finalPrefix, publishContext));
 
-        server.put(finalPrefix + "/*", (ctx) -> {
+        routes.put(finalPrefix + "/*", (ctx) -> {
             String path = ctx.path().substring(finalPrefix.length());
             MavenConfiguration.LOGGER.info("Recieved data from {} ({}) at path '{}'", ctx.ip(), ctx.userAgent(), path);
 
@@ -64,7 +66,7 @@ public record MavenConfiguration(String signCmd, @NotNull Path mavenOutputPath, 
             ctx.status(HttpStatus.OK);
         });
 
-        server.get(finalPrefix + "/commit", (ctx) -> {
+        routes.get(finalPrefix + "/commit", (ctx) -> {
             synchronized (publishContext.staged) {
                 if (publishContext.staged.isEmpty()) {
                     ctx.result("NOTHING STAGED");

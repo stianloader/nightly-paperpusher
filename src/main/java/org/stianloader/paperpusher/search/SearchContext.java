@@ -76,7 +76,7 @@ import xmlparser.XmlParser;
 import xmlparser.error.InvalidXml;
 import xmlparser.model.XmlElement;
 
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Handler;
 import io.javalin.http.HttpStatus;
 
@@ -196,7 +196,7 @@ public class SearchContext {
         }
     }
 
-    public void attach(Javalin server, MavenPublishContext publish) {
+    public void attach(@NotNull RoutesConfig routes, MavenPublishContext publish) {
         this.ensureMavenIndexInitialized();
         this.ensureDeltaDBInitialized();
 
@@ -205,22 +205,26 @@ public class SearchContext {
         }
 
         String prefix = this.config.searchBindPrefix;
+
         if (prefix.codePointBefore(prefix.length()) == '/') {
             prefix = prefix.substring(0, prefix.length() - 1);
         }
+
         String finalPrefix = prefix;
+
         Handler methodNotAllowedHandler = (ctx) -> {
             ctx.result("HTTP Response code 405 (METHOD NOT ALLOWED): The search endpoint should only be called using GET requests.");
             ctx.status(HttpStatus.METHOD_NOT_ALLOWED);
         };
-        server.put(finalPrefix + "/*", methodNotAllowedHandler);
-        server.post(finalPrefix + "/*", methodNotAllowedHandler);
-        server.get(finalPrefix + "/projects", (ctx) -> DeltaServer.listProjects(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/packages/{groupid}/{artifactid}", (ctx) -> DeltaServer.listPackages(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/classes/{groupid}/{artifactid}/{package}", (ctx) -> DeltaServer.listClasses(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/members/{groupid}/{artifactid}/{package}/{class}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/versions/{groupid}/{artifactid}", ctx -> DeltaServer.listVersions(this.searchDatabaseConnection, ctx));
-        server.get(finalPrefix + "/changelog/{groupid}/{artifactid}/{version}", ctx -> DeltaServer.listVersionChanges(this.searchDatabaseConnection, ctx));
+
+        routes.put(finalPrefix + "/*", methodNotAllowedHandler);
+        routes.post(finalPrefix + "/*", methodNotAllowedHandler);
+        routes.get(finalPrefix + "/projects", (ctx) -> DeltaServer.listProjects(this.searchDatabaseConnection, ctx));
+        routes.get(finalPrefix + "/packages/{groupid}/{artifactid}", (ctx) -> DeltaServer.listPackages(this.searchDatabaseConnection, ctx));
+        routes.get(finalPrefix + "/classes/{groupid}/{artifactid}/{package}", (ctx) -> DeltaServer.listClasses(this.searchDatabaseConnection, ctx));
+        routes.get(finalPrefix + "/members/{groupid}/{artifactid}/{package}/{class}", (ctx) -> DeltaServer.listMembers(this.searchDatabaseConnection, ctx));
+        routes.get(finalPrefix + "/versions/{groupid}/{artifactid}", ctx -> DeltaServer.listVersions(this.searchDatabaseConnection, ctx));
+        routes.get(finalPrefix + "/changelog/{groupid}/{artifactid}/{version}", ctx -> DeltaServer.listVersionChanges(this.searchDatabaseConnection, ctx));
 
         publish.addPublicationListener(this::updateMavenIndex);
         publish.addPublicationListener(this::updateDeltaDB);
