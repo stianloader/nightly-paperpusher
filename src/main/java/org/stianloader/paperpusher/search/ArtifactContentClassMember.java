@@ -85,6 +85,7 @@ public class ArtifactContentClassMember implements Comparable<ArtifactContentCla
     }
 
     @Override
+    @NotNull
     public String toString() {
         return this.owner + '.' + this.name + ':' + this.desc;
     }

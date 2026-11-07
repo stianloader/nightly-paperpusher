@@ -52,6 +52,7 @@ public class ArtifactContentClass implements Comparable<ArtifactContentClass> {
     }
 
     @Override
+    @NotNull
     public String toString() {
         return this.name;
     }

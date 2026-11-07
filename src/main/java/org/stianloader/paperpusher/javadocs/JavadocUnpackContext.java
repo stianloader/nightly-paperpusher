@@ -179,20 +179,21 @@ public class JavadocUnpackContext {
         cache.lastAccess.set(System.currentTimeMillis());
         ZipArchive archive = cache.archive.get();
         LocalFileHeader localFile = archive.getLocalFileByName(entryPath);
+
         if (localFile == null && (entryPath.isEmpty() || entryPath.codePointBefore(entryPath.length()) == '/')) {
             localFile = archive.getLocalFileByName(entryPath + "index.html");
         }
+
         if (localFile == null) {
             outputContext.result("HTTP error code 404 (not found): The requested resource does not exist within the javadocs.");
             outputContext.status(HttpStatus.NOT_FOUND);
             return;
         }
+
         final byte[] bytes;
+
         try {
             bytes = localFile.decompress(LLJZipUtils.getDecompressor(localFile)).toArray(ValueLayout.JAVA_BYTE);
-            if (bytes == null) {
-                throw new IOException("Null byte array");
-            }
         } catch (IOException e) {
             LoggerFactory.getLogger(JavadocUnpackContext.class).error("I/O exception raised during cache lookup", e);
             outputContext.result("HTTP error code 500 (internal server error); An I/O error occured while processing your request. Please try again another time. If the issue does not clear itself, contact the responsible system administrator.");
@@ -219,7 +220,6 @@ public class JavadocUnpackContext {
             }
         }
 
-        assert bytes != null; // Technically always != null, but eclipse refuses to understand that for a reason that eludes me
         outputContext.result(bytes);
         outputContext.status(HttpStatus.OK);
         this.lastUsedRecord = cache;

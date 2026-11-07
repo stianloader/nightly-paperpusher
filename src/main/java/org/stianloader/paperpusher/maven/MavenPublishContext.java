@@ -400,7 +400,7 @@ public class MavenPublishContext {
     public final Map<String, @NotNull StagedResource> staged = new ConcurrentHashMap<>();
 
     @NotNull
-    private final Path tempStagingPath;
+    private final SafeTempDirectory tempStagingPath;
 
     @NotNull
     public final Path writePath;
@@ -414,7 +414,7 @@ public class MavenPublishContext {
         }
 
         try {
-            this.tempStagingPath = Files.createTempDirectory("paperpusher-staging");
+            this.tempStagingPath = new SafeTempDirectory("paperpusher-staging");
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to create temporary path for staging resources", e);
         }
@@ -434,7 +434,7 @@ public class MavenPublishContext {
 
         // TODO verify checksums
 
-        Map<MavenArtifact, @NotNull StagedResource> artifacts = new HashMap<>();
+        Map<@NotNull MavenArtifact, @NotNull StagedResource> artifacts = new HashMap<>();
         Map<GA, @NotNull StagedResource> mavenMetadata = new HashMap<>();
 
         for (Map.Entry<String, @NotNull StagedResource> f : committed.entrySet()) {
@@ -511,6 +511,7 @@ public class MavenPublishContext {
 
         // Change version strings accordingly
         Map<GAV, String> mappedVersions = new HashMap<>();
+
         artifacts.keySet().stream()
             .map(MavenArtifact::gav)
             .distinct()

@@ -85,6 +85,7 @@ public class MemberTriple implements Comparable<MemberTriple> {
     }
 
     @Override
+    @NotNull
     public String toString() {
         return this.owner + '.' + this.name + ':' + this.desc;
     }

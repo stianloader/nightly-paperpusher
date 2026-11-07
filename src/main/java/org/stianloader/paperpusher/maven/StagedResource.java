@@ -15,18 +15,54 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.LoggerFactory;
 
 public class StagedResource implements Closeable, InputStreamProvider {
+
     @NotNull
     private static final Cleaner CLEANER_INSTANCE = Cleaner.create();
 
     @NotNull
     @Contract(pure = false)
     @CheckReturnValue
+    public static StagedResource writeToDisk(@NotNull SafeTempDirectory temporaryDir, byte @NotNull[] data) {
+        try {
+            Path stagingPath = temporaryDir.createFile("staging-resource", null);
+            Files.write(stagingPath, data);
+            return new StagedResource(stagingPath);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Unable to write resource data to temporary file", e);
+        }
+    }
+
+    @NotNull
+    @Contract(pure = false)
+    @CheckReturnValue
+    private static StagedResource writeToDisk0(@NotNull Path temporaryDir, byte @NotNull[] data) {
+        try {
+            Path stagingPath = Files.createTempFile(temporaryDir, "staging-resource", null);
+            Files.write(stagingPath, data);
+            return new StagedResource(stagingPath);
+        } catch (IOException e) {
+            if (Files.notExists(temporaryDir)) {
+                throw new UncheckedIOException("Unable to write resource data to temporary file: Parent temporary directory no longer exists.", e);
+            }
+
+            throw new UncheckedIOException("Unable to write resource data to temporary file", e);
+        }
+    }
+
+    @NotNull
+    @Contract(pure = false)
+    @CheckReturnValue
+    @Deprecated(forRemoval = true, since = "0.7.1")
     public static StagedResource writeToDisk(@NotNull Path temporaryDir, byte @NotNull[] data) {
         try {
             Path stagingPath = Files.createTempFile(temporaryDir, "staging-resource", null);
             Files.write(stagingPath, data);
             return new StagedResource(stagingPath);
         } catch (IOException e) {
+            if (Files.notExists(temporaryDir)) {
+                throw new UncheckedIOException("Unable to write resource data to temporary file: Parent temporary directory no longer exists.", e);
+            }
+
             throw new UncheckedIOException("Unable to write resource data to temporary file", e);
         }
     }
@@ -56,6 +92,13 @@ public class StagedResource implements Closeable, InputStreamProvider {
         Files.deleteIfExists(this.backingResource);
     }
 
+    /**
+     * A variant of the {@link #close()} function that throws an {@link UncheckedIOException} instead
+     * of an {@link IOException}.
+     *
+     * @throws UncheckedIOException Thrown when the {@link #close()} functions errors
+     * due to {@link Files#deleteIfExists(Path)}.
+     */
     public void closeUnchecked() {
         if (this.closed) {
             return; // Don't close twice

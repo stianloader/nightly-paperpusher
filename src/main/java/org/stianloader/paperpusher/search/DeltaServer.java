@@ -530,6 +530,7 @@ final class DeltaServer {
         Map<ChangeType, Set<@NotNull String>> packageDeltas = new EnumMap<>(ChangeType.class);
         Map<ChangeType, Set<@NotNull String>> classDeltas = new EnumMap<>(ChangeType.class);
         Map<ChangeType, Set<@NotNull MemberTriple>> memberDeltas = new EnumMap<>(ChangeType.class);
+
         for (ChangeType v : ChangeType.values()) {
             packageDeltas.put(v, new TreeSet<>());
             classDeltas.put(v, new TreeSet<>());
@@ -582,12 +583,17 @@ final class DeltaServer {
             return;
         }
 
-        int elementCount = Arrays.asList(packageDeltas, classDeltas, memberDeltas)
-                .stream()
-                .map(Map::values)
-                .flatMap(Collection::stream)
-                .mapToInt(Set::size)
-                .sum();
+        int elementCount = 0;
+
+        for (@NotNull Collection<? extends Set<?>> deltaMap : Arrays.asList(packageDeltas.values(), classDeltas.values(), memberDeltas.values())) {
+            for (Set<?> elements : deltaMap) {
+                if (elements == null) {
+                    continue;
+                }
+
+                elementCount += elements.size();
+            }
+        }
 
         final StringBuilder htmlOut = new StringBuilder(htmlPreamble);
         htmlOut

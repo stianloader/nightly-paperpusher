@@ -31,6 +31,7 @@ public class ArtifactContentPackage implements Comparable<ArtifactContentPackage
     }
 
     @Override
+    @NotNull
     public String toString() {
         return this.name;
     }

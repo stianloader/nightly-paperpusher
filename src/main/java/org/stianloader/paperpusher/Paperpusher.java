@@ -28,7 +28,6 @@ import org.stianloader.paperpusher.search.SearchContext.SearchConfiguration;
 import org.stianloader.picoresolve.version.VersionRange;
 
 import io.javalin.Javalin;
-import io.javalin.compression.CompressionStrategy;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpStatus;
 
